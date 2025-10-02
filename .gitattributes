@@ -1,0 +1,6 @@
+﻿* text=auto
+
+# Trate scripts do Windows como CRLF
+*.bat eol=crlf
+*.cmd eol=crlf
+*.ps1 eol=crlf

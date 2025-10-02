@@ -1,0 +1,34 @@
+﻿# === Laravel / Composer / Node
+/vendor/
+node_modules/
+npm-debug.log*
+yarn-error.log*
+/public/hot
+/public/storage
+/storage/*.key
+/.fleet
+
+# === Ambientes & cache
+.env
+.env.*
+!.env.example
+.phpunit.result.cache
+Homestead.yaml
+Homestead.json
+/.vagrant
+
+# === IDEs / SO
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+
+# === Logs, dumps e zips
+*.log
+*.sql
+*.zip
+*.7z
+*.rar
+
+# === Artefatos diversos
+/public/build
