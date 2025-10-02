@@ -1,0 +1,158 @@
+/* ======== SIGECON (topbar escuro + conteúdo claro) ======== */
+:root{
+  /* paleta base do topo */
+  --bg:#0b0f1a; --bg-2:#0e1422; --card:#11192a;
+  --brand:#5b8fff; --brand-2:#63fbd4;
+
+  /* paleta para conteúdo claro */
+  --text:#0f172a;            /* texto padrão (quase preto) */
+  --muted:#475569;           /* textos secundários */
+  --border:#e5e7eb;          /* bordas */
+  --surface:#ffffff;         /* fundo de cartões / inputs */
+  --surface-2:#f8fafc;       /* fundo da página */
+}
+
+/* base (claro) */
+*{ box-sizing:border-box }
+html,body{ margin:0; padding:0; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif }
+body{ background:var(--surface-2); color:var(--text) }
+
+/* containers */
+.container{ width:100%; max-width:1180px; margin:0 auto }
+.container.inner{ display:flex; align-items:center; gap:12px; padding:12px 16px }
+.container.page{ padding:24px 16px 48px }
+
+/* ===== Topbar (permanece escuro) ===== */
+.topbar{
+  position:sticky; top:0; z-index:50;
+  background:linear-gradient(180deg, #0c1220 0%, #0c1220cc 100%);
+  backdrop-filter:saturate(1.2) blur(6px);
+  border-bottom:1px solid #1a2742;
+}
+.topbar .logo{ width:28px; height:28px; display:block }
+.topbar .brand{ color:#e7eeff; text-decoration:none; font-weight:700; letter-spacing:.2px }
+.topbar .nav{ display:flex; align-items:center; gap:14px; flex:1 }
+.topbar .nav a{ color:#d9e6f7; text-decoration:none; font-size:14px; opacity:.9; padding:8px 10px; border-radius:8px }
+.topbar .nav a:hover{ background:#121b2f; opacity:1 }
+.topbar .nav .spacer{ flex:1 }
+.topbar .nav .search input{
+  width:280px; max-width:40vw;
+  background:#0f1729; color:#d9e6f7; border:1px solid #1b2744;
+  border-radius:10px; padding:8px 12px; outline:none;
+}
+.topbar .iconbtn{ font-size:16px; line-height:1; opacity:.9; color:#d9e6f7 }
+.topbar .user{ font-size:14px; opacity:.95; color:#d9e6f7 }
+
+/* ===== Títulos / textos (claros) ===== */
+h1{ font-size:28px; margin:0 0 6px; color:var(--text) }
+.sub{ color:var(--muted); font-size:14px; margin-bottom:18px }
+.section-title{ margin:22px 0 10px; font-weight:600; color:var(--text) }
+
+/* ===== Toolbar (clara) ===== */
+.toolbar{ display:flex; align-items:center; gap:10px; margin:14px 0 20px }
+.toolbar .btn{
+  background:var(--surface); color:var(--text); border:1px solid var(--border);
+  padding:10px 12px; border-radius:10px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:8px;
+}
+.toolbar .btn:hover{ background:#f1f5f9 }
+.toolbar .btn.primary{
+  background:linear-gradient(135deg, var(--brand), var(--brand-2));
+  color:#0c1220; border-color:transparent; font-weight:600;
+}
+.toolbar .btn.right{ margin-left:auto }
+.toolbar input[type="text"], .toolbar input[type="search"]{
+  background:var(--surface); color:var(--text); border:1px solid var(--border);
+  border-radius:10px; padding:10px 12px; outline:none;
+}
+
+/* ===== Cards (claros) ===== */
+.card{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:16px 16px; margin:10px 0;
+  background:var(--surface);
+  border:1px solid var(--border); border-radius:16px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
+.card.active{ border-color:#cbd5e1; background:var(--surface) }
+.card .sub{ margin:0; color:var(--muted) }
+.card .title{ font-size:18px; font-weight:600; margin:3px 0 6px; color:var(--text) }
+.card .meta{ color:var(--muted); display:flex; gap:10px; flex-wrap:wrap; font-size:13px }
+.card .actions{ display:flex; gap:8px; margin-bottom:10px }
+.card .btn{
+  background:var(--surface); color:var(--text); border:1px solid var(--border);
+  padding:8px 10px; border-radius:10px; text-decoration:none; font-size:13px;
+}
+.card .btn:hover{ background:#f1f5f9 }
+.card .pill{
+  white-space:nowrap;
+  background:#e9f2ff; color:#1e3a8a; border:1px solid #cfe1ff;
+  padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600;
+}
+
+/* Vazia / paginação */
+.empty{
+  padding:26px; border:1px dashed #cbd5e1; border-radius:14px;
+  background:#ffffff; color:var(--muted); text-align:center;
+}
+.pagination{ margin-top:16px }
+
+/* Helpers */
+.flex{ display:flex }
+.right{ margin-left:auto }
+
+/* Responsivo */
+@media (max-width: 920px){
+  .topbar .nav a{ display:none }
+  .topbar .nav .spacer{ display:none }
+  .topbar .nav .search input{ width:36vw; max-width:220px }
+  .card{ flex-direction:column; align-items:flex-start }
+}
+
+{{-- Tipografia global mais compacta (aplica em todas as páginas) --}}
+<style id="sigecon-typography-compact">
+  :root{
+    /* ajuste fino aqui se quiser: 13–15px */
+    --fs-base: 14px;    /* tamanho base */
+    --lh-base: 1.45;    /* altura de linha padrão */
+
+    /* derivados (evite mexer primeiro, ajuste --fs-base) */
+    --fs-sm: 0.875rem;  /* ~12.25px */
+    --fs-md: 0.95rem;   /* ~13.3px  */
+    --fs-lg: 1.05rem;   /* ~14.7px  */
+    --fs-h1: 1.45rem;   /* ~20px    */
+    --fs-h2: 1.25rem;   /* ~17.5px  */
+    --fs-h3: 1.1rem;    /* ~15.4px  */
+  }
+
+  html{ font-size: var(--fs-base); }
+  body{ font-size: 1rem; line-height: var(--lh-base); }
+
+  /* Títulos */
+  h1{ font-size: var(--fs-h1); margin:.6em 0 .35em; }
+  h2{ font-size: var(--fs-h2); margin:.6em 0 .35em; }
+  h3{ font-size: var(--fs-h3); margin:.6em 0 .35em; }
+
+  /* Botões no padrão do layout */
+  .btn{ font-size: var(--fs-md); }
+
+  /* Cards e cabeçalhos dos cards */
+  .card-min .hd{ font-size: var(--fs-md); }
+
+  /* Form padrão do config */
+  .form-min label{ font-size: var(--fs-sm); }
+  .form-min input[type="text"],
+  .form-min textarea,
+  .form-min select{ font-size: var(--fs-md); }
+
+  /* Texto auxiliar/subtítulo */
+  .sub, .muted{ font-size: var(--fs-sm); }
+
+  /* Menu esquerdo (parcial right-menu) */
+  .rmenu .title{ font-size: var(--fs-md); }
+  .rmenu .sub{ font-size: var(--fs-sm); }
+  .rmenu .mi{ font-size: var(--fs-md); }
+  .rmenu .mi i{ width:16px; height:16px; } /* ícones um tico menores */
+
+  /* Opcional: ligeiro ajuste em tabelas/listas longas */
+  table, th, td{ font-size: var(--fs-md); }
+</style>

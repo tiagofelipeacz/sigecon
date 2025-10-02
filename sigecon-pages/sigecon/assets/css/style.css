@@ -1,0 +1,116 @@
+
+/* ==== Tokens (HSL) ==== */
+:root {
+  --background: 0 0% 98%;
+  --foreground: 215 25% 27%;
+  --card: 0 0% 100%;
+  --card-foreground: 215 25% 27%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 215 25% 27%;
+  --primary: 214 84% 56%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 214 32% 91%;
+  --secondary-foreground: 215 25% 27%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --accent: 214 32% 91%;
+  --accent-foreground: 215 25% 27%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 214 84% 56%;
+  --header-bg: 215 28% 17%;
+  --header-foreground: 210 40% 98%;
+  --radius: 12px;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%; overflow-x:hidden}
+body{
+  margin:0; background:hsl(var(--background)); color:hsl(var(--foreground));
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  font-size:15px; font-weight:400; line-height:1.48;
+}
+a{color:hsl(var(--primary)); text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:1400px; margin:0 auto; padding:24px}
+
+/* ==== Topbar ==== */
+.topbar{position:sticky; top:0; z-index:50; background:hsl(var(--header-bg)); color:hsl(var(--header-foreground)); box-shadow:0 8px 24px rgba(0,0,0,.08)}
+.topbar .inner{height:64px; display:flex; align-items:center; gap:24px}
+.brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px}
+.nav{display:flex; align-items:center; gap:18px; flex:1}
+.nav a{color:hsl(var(--header-foreground)); padding:8px 10px; border-radius:10px; font-weight:500; font-size:14px}
+.nav a:hover,.nav a.active{background:rgba(255,255,255,.06)}
+.nav .spacer{flex:1}
+.search{display:flex; align-items:center; gap:10px}
+.search input{height:36px; min-width:260px; border-radius:12px; padding:0 12px; border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06); color:#e9f2ff; outline:none}
+.iconbtn{display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06)}
+.logo{height:26px; width:26px; background:#0ea5e9; border-radius:6px}
+
+/* ==== Header da página ==== */
+.page{padding:24px 0}
+h1{margin:0; font-size:26px; font-weight:700}
+.sub{color:hsl(var(--muted-foreground)); margin-top:6px}
+
+.toolbar{display:flex; align-items:center; gap:10px; margin:14px 0 18px}
+.toolbar input{flex:1; max-width:460px; height:38px; border-radius:12px; padding:0 12px; border:1px solid hsl(var(--input)); background:hsl(var(--card)); color:hsl(var(--foreground))}
+.btn{
+  display:inline-flex; align-items:center;
+  background:hsl(var(--card)); color:hsl(var(--foreground));
+  border:1px solid hsl(var(--border)); border-radius:12px;
+  padding:8px 12px; font-weight:600; font-size:14px; cursor:pointer;
+  line-height:1; white-space:nowrap; vertical-align:middle;
+}
+.btn:hover{box-shadow:0 10px 20px rgba(2,8,23,.06)}
+.btn.primary{background:hsl(var(--primary)); border-color:hsl(var(--primary)); color:hsl(var(--primary-foreground))}
+.btn.icon{padding:8px 12px}
+/* ícone circular (não depende de gap) */
+.btn .ico{
+  width:24px; height:24px; margin-right:8px;
+  border-radius:999px; background:hsl(var(--secondary)); border:1px solid hsl(var(--border));
+  display:inline-flex; align-items:center; justify-content:center; flex:0 0 24px;
+}
+.btn .ico svg{width:14px; height:14px; color:hsl(var(--foreground))}
+
+/* ==== Cards ==== */
+.section-title{margin:18px 0 10px; font-weight:700; font-size:16px}
+.card{background:hsl(var(--card)); border:1px solid hsl(var(--border)); border-radius:var(--radius); padding:16px; box-shadow:0 8px 20px rgba(2,8,23,.04); display:flex; gap:16px; justify-content:space-between; align-items:flex-start}
+.card.active{border-left:4px solid hsl(var(--primary))}
+.meta{display:flex; gap:18px; align-items:center; color:hsl(var(--muted-foreground)); font-size:14px; margin-top:8px}
+.actions{display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:6px}
+/* fallback p/ browsers sem gap em flex */
+.actions .btn{margin-right:10px; margin-bottom:10px}
+.actions .btn:last-child{margin-right:0}
+.pill{display:inline-flex; align-items:center; padding:6px 10px; border-radius:999px; background:hsl(var(--primary)); color:hsl(var(--primary-foreground)); font-weight:700; font-size:12px}
+.title{font-weight:700; font-size:18px}
+.right{margin-left:auto}
+
+/* ==== Layout interno com sidebar ==== */
+.breadcrumbs{color:hsl(var(--muted-foreground)); font-size:13px; margin-bottom:12px}
+.layout{display:grid; grid-template-columns:280px 1fr; gap:18px}
+.sidebar{position:sticky; top:84px; background:hsl(var(--card)); border:1px solid hsl(var(--border)); border-radius:var(--radius); box-shadow:0 8px 20px rgba(2,8,23,.04); padding:12px; height:fit-content; max-height:calc(100vh - 120px); overflow:auto}
+.side-header{display:flex; flex-direction:column; gap:2px; padding:6px 8px 10px; border-bottom:1px solid hsl(var(--border)); margin-bottom:6px}
+.side-header small{color:hsl(var(--muted-foreground)); font-size:12px}
+.side{display:flex; flex-direction:column; gap:6px}
+.side a{display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:10px; color:inherit; font-size:14px}
+.side a:hover{background:hsl(var(--secondary))}
+.side a.active{background:hsl(var(--accent)); color:hsl(var(--accent-foreground))}
+
+/* ==== Form blocks ==== */
+.form-card{background:hsl(var(--card)); border:1px solid hsl(var(--border)); border-radius:var(--radius); padding:16px; box-shadow:0 8px 20px rgba(2,8,23,.04); margin-bottom:16px}
+.form-title{font-size:16px; font-weight:700; margin:0 0 10px}
+.grid{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+label{font-size:12px; color:hsl(var(--muted-foreground)); display:block; margin:8px 0 4px}
+input[type="text"], input[type="date"], input[type="time"], textarea{
+  width:100%; padding:9px 11px; border:1px solid hsl(var(--border)); border-radius:12px;
+  background:hsl(var(--card)); color:hsl(var(--foreground)); font-size:14px; font-weight:400
+}
+textarea{min-height:82px; resize:vertical}
+
+@media (max-width: 1024px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:relative; top:auto; max-height:none}
+  .search input{min-width:160px}
+}
