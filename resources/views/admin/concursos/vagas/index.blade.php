@@ -4,13 +4,16 @@
 
 @php
   // Variáveis esperadas do controller:
-  // $concurso (Model), $cargos (Collection), $itens (Collection), $niveis (Collection), $tipos (Collection), $hasOrdemItem (bool)
+  // $concurso (Model), $cargos (Collection), $itens (Collection), $niveis (Collection), $tipos (Collection), $hasOrdemItem (bool), $defaults (array)
 
   $cargos       = $cargos ?? collect();
   $itens        = $itens ?? collect();
   $niveis       = $niveis ?? collect();
   $tipos        = $tipos ?? collect();
   $hasOrdemItem = $hasOrdemItem ?? false;
+
+  $df     = $defaults ?? [];
+  $isEdit = !empty($df['cargo_id'] ?? null);
 @endphp
 
 @section('content')
@@ -60,57 +63,72 @@
   {{-- Conteúdo --}}
   <div class="gc-row-2">
 
-    {{-- NOVO CARGO (com várias localidades) --}}
+    {{-- NOVO CARGO / EDIÇÃO (com várias localidades) --}}
     <div class="gc-card">
       <div class="gc-body">
-        <div class="mb-2" style="font-weight:600">Cadastrar Cargo (com Localidades)</div>
+        <div class="mb-2" style="font-weight:600">
+          {{ $isEdit ? 'Editar Cargo (com Localidades)' : 'Cadastrar Cargo (com Localidades)' }}
+        </div>
 
-        <form method="post" action="{{ route('admin.concursos.vagas.store', $concurso) }}" id="formNovoCargo">
+        <form method="post"
+              action="{{ $isEdit
+                ? route('admin.concursos.vagas.update', ['concurso' => $concurso->id, 'cargo' => $df['cargo_id']])
+                : route('admin.concursos.vagas.store', $concurso->id) }}"
+              id="formNovoCargo">
           @csrf
+          @if($isEdit) @method('PUT') @endif
 
           {{-- ORDEM SOLICITADA --}}
           <div class="grid g-3">
             <div>
               <label class="tag">Código do Cargo (opcional)</label>
-              <input type="text" name="codigo" maxlength="20" class="input" />
+              <input type="text" name="codigo" maxlength="20" class="input"
+                     value="{{ old('codigo', $df['codigo'] ?? '') }}" />
             </div>
 
             <div>
               <label class="tag">Nível de Escolaridade</label>
-              <select name="nivel_id" class="input" required>
+              <select name="nivel_id" class="input" {{ $niveis->count() ? '' : 'disabled' }}>
                 <option value="">- Selecionar -</option>
                 @foreach($niveis as $n)
-                  <option value="{{ $n->id }}">{{ $n->nome }}</option>
+                  <option value="{{ $n->id }}"
+                    @selected((int)old('nivel_id', $df['nivel_id'] ?? 0) === (int)$n->id)>
+                    {{ $n->nome }}
+                  </option>
                 @endforeach
               </select>
             </div>
 
             <div>
               <label class="tag">Taxa de inscrição (R$)</label>
-              <input type="text" name="valor_inscricao" placeholder="Ex.: 85,00" class="input" />
+              <input type="text" name="valor_inscricao" placeholder="Ex.: 85,00" class="input"
+                     value="{{ old('valor_inscricao', $df['valor_inscricao'] ?? '') }}" />
             </div>
           </div>
 
           <div class="mt-2">
             <label class="tag">Nome/Título do Cargo</label>
-            <input type="text" name="nome" required class="input input-lg" />
+            <input type="text" name="nome" required class="input input-lg"
+                   value="{{ old('nome', $df['nome'] ?? '') }}" />
           </div>
 
           {{-- Campos adicionais do quadro de cargos --}}
           <div class="grid g-2 mt-2">
             <div>
               <label class="tag">Salário (R$) - opcional</label>
-              <input type="text" name="salario" placeholder="Ex.: 2.345,67" class="input" />
+              <input type="text" name="salario" placeholder="Ex.: 2.345,67" class="input"
+                     value="{{ old('salario', $df['salario'] ?? '') }}" />
             </div>
             <div>
               <label class="tag">Jornada - opcional</label>
-              <input type="text" name="jornada" placeholder="Ex.: 40h semanais" class="input" />
+              <input type="text" name="jornada" placeholder="Ex.: 40h semanais" class="input"
+                     value="{{ old('jornada', $df['jornada'] ?? '') }}" />
             </div>
           </div>
 
           <div class="mt-2">
             <label class="tag">Detalhes/Observações do Cargo (opcional)</label>
-            <textarea name="detalhes" rows="2" class="input"></textarea>
+            <textarea name="detalhes" rows="2" class="input">{{ old('detalhes', $df['detalhes'] ?? '') }}</textarea>
           </div>
 
           <div class="hr"></div>
@@ -121,7 +139,65 @@
           </div>
 
           <div id="repLocalidades" class="grid" style="gap:12px">
-            {{-- linhas serão inseridas via JS --}}
+            @php
+              $locaisOld = old('locais', $df['locais'] ?? []);
+            @endphp
+
+            @forelse($locaisOld as $i => $loc)
+              @php
+                $nomeLoc = $loc['local'] ?? '';
+                $qtd     = (int)($loc['qtd_total'] ?? 0);
+                $cr      = !empty($loc['cr']) ? 1 : 0;
+                $map     = $loc['cotas'] ?? [];
+              @endphp
+              <div class="repeater-row" data-row="{{ $i }}">
+                <div class="grid g-3">
+                  <div>
+                    <label class="tag">Localidade</label>
+                    <input type="text" name="locais[{{ $i }}][local]" class="input"
+                           value="{{ $nomeLoc }}" placeholder="Digite o nome da localidade" />
+                  </div>
+
+                  <div>
+                    <label class="tag">Qtd. total de vagas</label>
+                    <input type="number" name="locais[{{ $i }}][qtd_total]" value="{{ $qtd }}" min="0" class="input" />
+                  </div>
+
+                  <div style="display:flex; align-items:flex-end">
+                    <label class="tag" style="width:100%">
+                      <input type="checkbox" name="locais[{{ $i }}][cr]" value="1"
+                             {{ $cr ? 'checked' : '' }} onchange="toggleCR(this)" />
+                      &nbsp;Cadastro de Reserva (CR)
+                    </label>
+                  </div>
+                </div>
+
+                @if($tipos->count())
+                <div class="mt-2">
+                  <div class="tag" style="display:block; margin-bottom:6px">Cotas por localidade (opcional)</div>
+                  <div class="grid g-4">
+                    @foreach($tipos as $t)
+                      @php $val = (int) ($map[$t->id] ?? 0); @endphp
+                      <div>
+                        <label class="tag">{{ $t->nome }}</label>
+                        <input type="number" name="locais[{{ $i }}][cotas][{{ $t->id }}]"
+                               value="{{ $val }}" min="0" class="input" />
+                      </div>
+                    @endforeach
+                  </div>
+                  <div class="inline-help">A soma das cotas não pode exceder a quantidade total (quando não for CR).</div>
+                </div>
+                @endif
+
+                <div class="mt-2" style="display:flex; gap:8px; justify-content:flex-end">
+                  <button type="button" class="btn danger" onclick="this.closest('.repeater-row').remove()">
+                    <i data-lucide="x"></i> Remover localidade
+                  </button>
+                </div>
+              </div>
+            @empty
+              {{-- sem locais: JS adiciona a primeira linha --}}
+            @endforelse
           </div>
 
           <div class="mt-2">
@@ -134,7 +210,7 @@
 
           <div>
             <button class="btn primary" type="submit">
-              <i data-lucide="save"></i> Salvar Cargo e Localidades
+              <i data-lucide="save"></i> {{ $isEdit ? 'Atualizar Cargo e Localidades' : 'Salvar Cargo e Localidades' }}
             </button>
           </div>
         </form>
@@ -181,13 +257,15 @@
                 </td>
                 <td>
                   <div style="display:flex; gap:8px; flex-wrap:wrap">
-                    {{-- Editar cargo (usa a mesma view create com defaults) --}}
-                    <a class="btn" href="{{ route('admin.concursos.vagas.edit', [$concurso, $cg->id]) }}">
+                    {{-- Editar cargo (parâmetros nomeados para evitar erro de ordem) --}}
+                    <a class="btn"
+                       href="{{ route('admin.concursos.vagas.edit', ['concurso' => $concurso->id, 'cargo' => $cg->id]) }}">
                       <i data-lucide="pencil"></i> Editar
                     </a>
 
                     {{-- Excluir cargo --}}
-                    <form method="post" action="{{ route('admin.concursos.vagas.cargos.destroy', [$concurso, $cg->id]) }}"
+                    <form method="post"
+                          action="{{ route('admin.concursos.vagas.cargos.destroy', ['concurso'=>$concurso->id, 'cargo'=>$cg->id]) }}"
                           onsubmit="return confirm('Remover cargo e todas as suas localidades?')">
                       @csrf @method('delete')
                       <button class="btn danger" type="submit"><i data-lucide="trash-2"></i> Remover</button>
@@ -285,9 +363,10 @@
   document.addEventListener('DOMContentLoaded', () => {
     window.lucide?.createIcons();
 
-    const rep = document.getElementById('repLocalidades');
+    const rep   = document.getElementById('repLocalidades');
     const btnAdd = document.getElementById('btnAddLoc');
 
+    // Template vazio
     const modelo = (idx) => `
       <div class="repeater-row" data-row="\${idx}">
         <div class="grid g-3">
@@ -332,7 +411,8 @@
       </div>
     `;
 
-    let idx = 0;
+    let idx = rep.querySelectorAll('.repeater-row').length;
+
     const addRow = () => {
       rep.insertAdjacentHTML('beforeend', modelo(idx++));
       window.lucide?.createIcons();
@@ -340,8 +420,11 @@
 
     btnAdd?.addEventListener('click', addRow);
 
-    // inicia com uma linha
-    addRow();
+    // Se não vierem linhas do servidor (novo cargo), cria a primeira
+    if (idx === 0) addRow();
+
+    // Se houver CR marcado inicialmente (edição), aplica bloqueios
+    rep.querySelectorAll('input[type="checkbox"][name*="[cr]"]:checked').forEach(chk => toggleCR(chk));
   });
 
   // Quando marcar CR, desabilita qtd_total e zera cotas
