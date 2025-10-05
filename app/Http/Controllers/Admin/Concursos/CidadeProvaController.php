@@ -7,132 +7,200 @@ use App\Models\Concurso;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Pagination\LengthAwarePaginator;
 
 class CidadeProvaController extends Controller
 {
-    public function index(Concurso $concurso, Request $req)
+    /** LISTA */
+    public function index(Concurso $concurso, Request $request)
     {
-        $q   = trim((string)$req->get('q',''));
-        $uf  = trim((string)$req->get('uf',''));
-        $per = 20;
+        $q  = trim((string) $request->input('q', ''));
+        $uf = (string) $request->input('uf', '');
+        if ($uf === 'null') { $uf = ''; }
 
-        $tbl = $this->tblCidades();
-        if (!$tbl) {
-            // Sem tabela ainda → entrega listagem vazia para a view não quebrar
-            $rows = new LengthAwarePaginator([], 0, $per, 1, [
-                'path'  => $req->url(),
-                'query' => $req->query(),
-            ]);
-            return view('admin.concursos.cidades.index', compact('concurso','rows','q','uf'));
-        }
+        $per = 20;
+        $tbl = $this->pickCitiesTable();
 
         $query = DB::table($tbl)->where('concurso_id', $concurso->id);
 
         if ($q !== '') {
-            $query->where(function($w) use ($q){
-                $w->where('cidade', 'like', "%{$q}%")
-                  ->orWhere('nome', 'like', "%{$q}%");
+            $query->where(function ($w) use ($q, $tbl) {
+                $hasCidade = Schema::hasColumn($tbl, 'cidade');
+                $hasNome   = Schema::hasColumn($tbl, 'nome');
+
+                if ($hasCidade && $hasNome) {
+                    $w->where('cidade', 'like', "%{$q}%")
+                      ->orWhere('nome', 'like', "%{$q}%");
+                } elseif ($hasCidade) {
+                    $w->where('cidade', 'like', "%{$q}%");
+                } elseif ($hasNome) {
+                    $w->where('nome', 'like', "%{$q}%");
+                }
             });
         }
+
         if ($uf !== '') {
-            $query->where('uf', $uf);
+            foreach (['uf', 'estado', 'sigla_uf'] as $c) {
+                if (Schema::hasColumn($tbl, $c)) {
+                    $query->where($c, $uf);
+                    break;
+                }
+            }
         }
 
-        $rows = $query->orderBy('cidade')->orderBy('nome')
+        $orderCol = Schema::hasColumn($tbl, 'cidade') ? 'cidade'
+                   : (Schema::hasColumn($tbl, 'nome') ? 'nome' : 'id');
+
+        if (Schema::hasColumn($tbl, 'uf')) {
+            $query->orderBy('uf');
+        } elseif (Schema::hasColumn($tbl, 'estado')) {
+            $query->orderBy('estado');
+        }
+
+        $rows = $query->orderBy($orderCol)
             ->paginate($per)
-            ->through(function($r){
-                $r = (object)$r;
+            ->through(function ($r) use ($concurso) {
+                $r = (object) $r;
                 $r->cidade = $r->cidade ?? $r->nome ?? null;
-                $r->cargos_lista = $this->cargosDaCidadeLista((int)$r->id);
+                $r->uf     = $r->uf ?? ($r->estado ?? ($r->sigla_uf ?? ''));
+                $r->cargos_lista = $this->cargosDaCidadeLista((int) $r->id, (int) $concurso->id);
                 return $r;
             });
 
-        return view('admin.concursos.cidades.index', compact('concurso','rows','q','uf'));
+        $ufs = $this->ufs();
+
+        return view('admin.concursos.cidades.index', compact('concurso','rows','q','uf','ufs'));
     }
 
+    /** FORM CRIAR */
     public function create(Concurso $concurso)
     {
-        $cidade = null;
-        $cargos = $this->listarCargos($concurso->id);
-        return view('admin.concursos.cidades.create', compact('concurso','cidade','cargos'));
+        $cidade       = null;
+        $ufs          = $this->ufs();
+        $cargos       = $this->loadCargosForConcurso($concurso->id);
+        $selecionados = [];
+
+        return view('admin.concursos.cidades.create', compact('concurso','cidade','ufs','cargos','selecionados'));
     }
 
-    public function edit(Concurso $concurso, int $cidade)
+    /** SALVAR NOVO */
+    public function store(Concurso $concurso, Request $request)
     {
-        $tbl = $this->tblCidades() ?? abort(500, 'Tabela de cidades de prova não encontrada.');
-        $row = DB::table($tbl)->where('id',$cidade)->where('concurso_id',$concurso->id)->first() ?? abort(404);
+        $tbl = $this->pickCitiesTable();
 
-        $row = (object)$row;
-        $row->cargos_ids = $this->idsCargosDaCidade($cidade);
-
-        $cargos = $this->listarCargos($concurso->id);
-
-        return view('admin.concursos.cidades.edit', [
-            'concurso' => $concurso,
-            'cidade'   => $row,
-            'cargos'   => $cargos,
-        ]);
-    }
-
-    public function store(Concurso $concurso, Request $req)
-    {
-        $data = $this->validated($req);
-        $tbl  = $this->tblCidades() ?? abort(500, 'Tabela de cidades de prova não encontrada.');
-
-        $id = DB::table($tbl)->insertGetId([
-            'concurso_id' => $concurso->id,
-            'cidade'      => $data['cidade'],
-            'uf'          => $data['uf'],
-            'created_at'  => now(),
-            'updated_at'  => now(),
+        $request->validate([
+            'cidade' => ['required','string','max:255'],
+            'uf'     => ['required','string','max:2'],
         ]);
 
-        $this->syncPivot($id, $data['cargos'] ?? []);
+        $data = ['concurso_id' => $concurso->id];
+
+        // cidade/nome
+        if (Schema::hasColumn($tbl, 'cidade')) {
+            $data['cidade'] = $request->cidade;
+        } elseif (Schema::hasColumn($tbl, 'nome')) {
+            $data['nome'] = $request->cidade;
+        }
+
+        // UF/estado
+        if (Schema::hasColumn($tbl, 'uf')) {
+            $data['uf'] = strtoupper($request->uf);
+        } elseif (Schema::hasColumn($tbl, 'estado')) {
+            $data['estado'] = strtoupper($request->uf);
+        } elseif (Schema::hasColumn($tbl, 'sigla_uf')) {
+            $data['sigla_uf'] = strtoupper($request->uf);
+        }
+
+        foreach (['ativo','disponivel'] as $maybe) {
+            if (Schema::hasColumn($tbl, $maybe)) {
+                $data[$maybe] = 1;
+            }
+        }
+
+        $cidadeId = DB::table($tbl)->insertGetId($data);
+
+        $cargoIds = (array) $request->input('cargos', []);
+        $this->syncPivotCargos($concurso->id, $cidadeId, $cargoIds);
 
         return redirect()
             ->route('admin.concursos.cidades.index', $concurso)
-            ->with('status', 'Cidade de prova criada.');
+            ->with('ok', 'Cidade de prova cadastrada com sucesso.');
     }
 
-    public function update(Concurso $concurso, int $cidade, Request $req)
+    /** FORM EDITAR */
+    public function edit(Concurso $concurso, $id)
     {
-        $data = $this->validated($req);
-        $tbl  = $this->tblCidades() ?? abort(500, 'Tabela de cidades de prova não encontrada.');
+        $tbl = $this->pickCitiesTable();
+        $cidade = (array) DB::table($tbl)->where('id', $id)->where('concurso_id',$concurso->id)->first();
+        abort_if(empty($cidade), 404);
+
+        $cidade = (object) $cidade;
+        $cidade->cidade = $cidade->cidade ?? ($cidade->nome ?? '');
+        $cidade->uf     = $cidade->uf ?? ($cidade->estado ?? ($cidade->sigla_uf ?? ''));
+
+        $ufs          = $this->ufs();
+        $cargos       = $this->loadCargosForConcurso($concurso->id);
+        $selecionados = $this->cidadeCargosIds((int)$id, (int)$concurso->id);
+
+        return view('admin.concursos.cidades.edit', compact('concurso','cidade','ufs','cargos','selecionados'));
+    }
+
+    /** ATUALIZAR */
+    public function update(Concurso $concurso, Request $request, $id)
+    {
+        $tbl = $this->pickCitiesTable();
+
+        $request->validate([
+            'cidade' => ['required','string','max:255'],
+            'uf'     => ['required','string','max:2'],
+        ]);
+
+        $data = [];
+
+        if (Schema::hasColumn($tbl, 'cidade')) {
+            $data['cidade'] = $request->cidade;
+        } elseif (Schema::hasColumn($tbl, 'nome')) {
+            $data['nome'] = $request->cidade;
+        }
+
+        if (Schema::hasColumn($tbl, 'uf')) {
+            $data['uf'] = strtoupper($request->uf);
+        } elseif (Schema::hasColumn($tbl, 'estado')) {
+            $data['estado'] = strtoupper($request->uf);
+        } elseif (Schema::hasColumn($tbl, 'sigla_uf')) {
+            $data['sigla_uf'] = strtoupper($request->uf);
+        }
 
         DB::table($tbl)
-            ->where('id', $cidade)
+            ->where('id', $id)
             ->where('concurso_id', $concurso->id)
-            ->update([
-                'cidade'     => $data['cidade'],
-                'uf'         => $data['uf'],
-                'updated_at' => now(),
-            ]);
+            ->update($data);
 
-        $this->syncPivot($cidade, $data['cargos'] ?? []);
+        $cargoIds = (array) $request->input('cargos', []);
+        $this->syncPivotCargos($concurso->id, (int)$id, $cargoIds);
 
         return redirect()
             ->route('admin.concursos.cidades.index', $concurso)
-            ->with('status', 'Cidade de prova atualizada.');
+            ->with('ok', 'Cidade de prova atualizada com sucesso.');
     }
 
-    private function validated(Request $req): array
+    /** REMOVER */
+    public function destroy(Concurso $concurso, $id)
     {
-        $ufs = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
+        $pivot = $this->pickPivotTable();
+        DB::table($pivot)->where('cidade_id', $id)->delete();
 
-        return $req->validate([
-            'cidade'   => ['required','string','max:120'],
-            'uf'       => ['required','in:'.implode(',',$ufs)],
-            'cargos'   => ['nullable','array'],
-            'cargos.*' => ['integer'],
-        ]);
+        $tbl = $this->pickCitiesTable();
+        DB::table($tbl)
+            ->where('id', $id)
+            ->where('concurso_id', $concurso->id)
+            ->delete();
+
+        return back()->with('ok', 'Cidade de prova removida.');
     }
 
-    // =====================
-    // Helpers de infraestrutura
-    // =====================
+    /* ============================== HELPERS ============================== */
 
-    private function tblCidades(): ?string
+    protected function pickCitiesTable(): string
     {
         foreach ([
             'concursos_cidades',
@@ -143,111 +211,117 @@ class CidadeProvaController extends Controller
         ] as $t) {
             if (Schema::hasTable($t)) return $t;
         }
-        return null;
+        return 'concursos_cidades';
     }
 
-    private function tblPivot(): ?string
+    protected function pickPivotTable(): string
     {
         foreach ([
             'concursos_cidades_cargos',
             'cidades_prova_cargos',
-            'cidade_prova_cargo',
-            'cidades_de_prova_cargos',
+            'concursos_cidade_prova_cargos',
+            'concursos_cargos_cidades',
         ] as $t) {
             if (Schema::hasTable($t)) return $t;
         }
-        return null;
+        return 'concursos_cidades_cargos';
+    }
+
+    /** UFs para select */
+    protected function ufs(): array
+    {
+        return [
+            ''=>'UF','AC'=>'AC','AL'=>'AL','AM'=>'AM','AP'=>'AP','BA'=>'BA','CE'=>'CE','DF'=>'DF','ES'=>'ES',
+            'GO'=>'GO','MA'=>'MA','MG'=>'MG','MS'=>'MS','MT'=>'MT','PA'=>'PA','PB'=>'PB','PE'=>'PE',
+            'PI'=>'PI','PR'=>'PR','RJ'=>'RJ','RN'=>'RN','RO'=>'RO','RR'=>'RR','RS'=>'RS','SC'=>'SC',
+            'SE'=>'SE','SP'=>'SP','TO'=>'TO',
+        ];
     }
 
     /**
-     * Retorna [tabela, idCol, nomeCol] para cargos.
+     * Carrega cargos do concurso.
+     * 1) concursos_vagas_cargos (nome)
+     * 2) fallback: distinct dos itens (quando existir só item/cota)
      */
-    private function tblCargos(): ?array
+    protected function loadCargosForConcurso(int $concursoId): array
     {
-        $cands = [
-            ['concursos_cargos','id','nome'],
-            ['concursos_cargos','id','titulo'],
-            ['cargos','id','nome'],
-            ['concursos_vagas_cargos','id','nome'],
-            ['vagas_cargos','id','nome'],
-        ];
-        foreach ($cands as [$t,$id,$nm]) {
-            if (Schema::hasTable($t) && Schema::hasColumn($t,$id) && Schema::hasColumn($t,$nm)) {
-                return [$t,$id,$nm];
+        if (Schema::hasTable('concursos_vagas_cargos')
+            && Schema::hasColumn('concursos_vagas_cargos','concurso_id')
+            && Schema::hasColumn('concursos_vagas_cargos','nome')) {
+
+            $rows = DB::table('concursos_vagas_cargos as c')
+                ->where('c.concurso_id', $concursoId)
+                ->orderBy('c.nome')
+                ->get(['c.id','c.nome']);
+
+            if ($rows->isNotEmpty()) {
+                return $rows->map(fn($r) => (object)['id'=>(int)$r->id,'titulo'=>(string)$r->nome])->all();
             }
         }
-        return null;
-    }
 
-    private function listarCargos(int $concursoId): array
-    {
-        $meta = $this->tblCargos();
-        if (!$meta) return [];
-        [$tbl,$id,$nm] = $meta;
+        // fallback (deriva dos itens)
+        if (Schema::hasTable('concursos_vagas_itens') && Schema::hasTable('concursos_vagas_cargos')) {
+            $rows = DB::table('concursos_vagas_itens as i')
+                ->join('concursos_vagas_cargos as c', 'c.id', '=', 'i.cargo_id')
+                ->where('i.concurso_id', $concursoId)
+                ->distinct()
+                ->orderBy('c.nome')
+                ->get(['c.id','c.nome']);
 
-        $q = DB::table($tbl)->select([$id.' as id',$nm.' as nome']);
-        if (Schema::hasColumn($tbl,'concurso_id')) {
-            $q->where('concurso_id',$concursoId);
+            return $rows->map(fn($r) => (object)['id'=>(int)$r->id,'titulo'=>(string)$r->nome])->all();
         }
-        return $q->orderBy($nm)->get()->map(fn($r)=>(object)$r)->all();
+
+        return [];
     }
 
-    private function pivotCidadeCol(string $pivot): string
+    /** IDs dos cargos já vinculados à cidade */
+    protected function cidadeCargosIds(int $cidadeId, int $concursoId): array
     {
-        foreach (['cidade_id','concursos_cidade_id','cidade_prova_id','concursos_cidades_id'] as $c) {
-            if (Schema::hasColumn($pivot,$c)) return $c;
-        }
-        return 'cidade_id';
+        $pivot = $this->pickPivotTable();
+        if (!Schema::hasTable($pivot)) return [];
+
+        return DB::table($pivot)
+            ->where('cidade_id', $cidadeId)
+            ->pluck('cargo_id')->map(fn($v)=>(int)$v)->all();
     }
 
-    private function pivotCargoCol(string $pivot): string
+    /** Lista nomes dos cargos vinculados (texto) */
+    protected function cargosDaCidadeLista(int $cidadeId, int $concursoId): string
     {
-        foreach (['cargo_id','concursos_cargo_id','vaga_cargo_id'] as $c) {
-            if (Schema::hasColumn($pivot,$c)) return $c;
-        }
-        return 'cargo_id';
+        $ids = $this->cidadeCargosIds($cidadeId, $concursoId);
+        if (empty($ids)) return '';
+
+        $nomes = DB::table('concursos_vagas_cargos')
+            ->where('concurso_id', $concursoId)
+            ->whereIn('id', $ids)
+            ->pluck('nome')
+            ->map(fn($s)=>trim((string)$s))
+            ->filter()
+            ->all();
+
+        return implode(', ', $nomes);
     }
 
-    private function syncPivot(int $cidadeId, array $ids): void
+    /** Sincroniza pivot cidade x cargos */
+    protected function syncPivotCargos(int $concursoId, int $cidadeId, array $cargoIds): void
     {
-        $pivot = $this->tblPivot();
-        if (!$pivot) return;
+        $pivot = $this->pickPivotTable();
+        if (!Schema::hasTable($pivot)) return;
 
-        $colCidade = $this->pivotCidadeCol($pivot);
-        $colCargo  = $this->pivotCargoCol($pivot);
-
-        DB::table($pivot)->where($colCidade, $cidadeId)->delete();
+        DB::table($pivot)->where('cidade_id', $cidadeId)->delete();
 
         $rows = [];
-        foreach (array_unique(array_map('intval',$ids)) as $cg) {
-            $rows[] = [$colCidade => $cidadeId, $colCargo => $cg];
+        foreach ($cargoIds as $cid) {
+            $cid = (int) $cid;
+            if ($cid > 0) {
+                $rows[] = [
+                    'cidade_id'   => $cidadeId,
+                    'cargo_id'    => $cid,
+                    'created_at'  => now(),
+                    'updated_at'  => now(),
+                ];
+            }
         }
-        if ($rows) DB::table($pivot)->insert($rows);
-    }
-
-    private function idsCargosDaCidade(int $cidadeId): array
-    {
-        $pivot = $this->tblPivot();
-        if (!$pivot) return [];
-        $colCidade = $this->pivotCidadeCol($pivot);
-        $colCargo  = $this->pivotCargoCol($pivot);
-
-        return DB::table($pivot)->where($colCidade,$cidadeId)->pluck($colCargo)->map(fn($v)=>(int)$v)->all();
-    }
-
-    private function cargosDaCidadeLista(int $cidadeId): string
-    {
-        $meta  = $this->tblCargos();
-        $pivot = $this->tblPivot();
-        if (!$meta || !$pivot) return '';
-
-        [$tbl,$id,$nm] = $meta;
-        $colCidade = $this->pivotCidadeCol($pivot);
-        $colCargo  = $this->pivotCargoCol($pivot);
-
-        $ids = DB::table($pivot)->where($colCidade,$cidadeId)->pluck($colCargo)->all();
-        if (!$ids) return '';
-
-        return DB::table($tbl)->whereIn($id,$ids)->orderBy($nm)->pluck($nm)->join(', ');
+        if (!empty($rows)) DB::table($pivot)->insert($rows);
     }
 }
