@@ -51,28 +51,31 @@
         $activeKey = $map[$first] ?? $first ?? 'root';
     }
 
-    // Itens
+    // ===== Itens (ordem e rótulos conforme solicitado) =====
     $items = [
-        ['key'=>'root',          'label'=>'Visão Geral',             'icon'=>'bar-chart-3',   'url'=> $hrefVisao],
-        ['key'=>'config',        'label'=>'Configurações',           'icon'=>'settings',      'url'=> "{$urlBase}/config"],
-        ['key'=>'cronograma',    'label'=>'Cronograma',              'icon'=>'calendar',      'url'=> "{$urlBase}/cronograma"],
-        ['key'=>'divulgacoes',   'label'=>'Divulgações',             'icon'=>'megaphone',     'url'=> "{$urlBase}/divulgacoes"],
-        ['key'=>'anexos',        'label'=>'Anexos',                  'icon'=>'paperclip',     'url'=> "{$urlBase}/anexos"],
-        ['key'=>'vagas',         'label'=>'Vagas',                   'icon'=>'briefcase',     'url'=> "{$urlBase}/vagas"],
-        ['key'=>'cidades',       'label'=>'Cidades / Locais / Salas','icon'=>'map-pin',       'url'=> "{$urlBase}/cidades"],
-        ['key'=>'inscricoes',    'label'=>'Inscrições',              'icon'=>'user-plus',     'url'=> "{$urlBase}/inscricoes"],
-        ['key'=>'documentos',    'label'=>'Documentos',              'icon'=>'file-text',     'url'=> "{$urlBase}/documentos"],
-        ['key'=>'divergencias',  'label'=>'Divergências de Cadastro','icon'=>'alert-triangle','url'=> "{$urlBase}/divergencias"],
-        ['key'=>'devolucao',     'label'=>'Devolução de Taxa',       'icon'=>'rotate-ccw',    'url'=> "{$urlBase}/devolucao"],
-        ['key'=>'subjudice',     'label'=>'Sub Judice',              'icon'=>'scale',         'url'=> "{$urlBase}/subjudice"],
-        ['key'=>'etapas',        'label'=>'Etapas',                  'icon'=>'layers',        'url'=> "{$urlBase}/etapas"],
-        ['key'=>'resultado-final','label'=>'Resultado Final',        'icon'=>'trophy',        'url'=> "{$urlBase}/resultado-final"],
-        ['key'=>'conferencia',   'label'=>'Conferência',             'icon'=>'check-square',  'url'=> "{$urlBase}/conferencia"],
-        ['key'=>'ferramentas',   'label'=>'Ferramentas',             'icon'=>'sliders',       'url'=> "{$urlBase}/ferramentas"],
-        ['key'=>'relatorios',    'label'=>'Relatórios',              'icon'=>'line-chart',    'url'=> "{$urlBase}/relatorios"],
-        ['key'=>'area-cliente',  'label'=>'Área do Cliente',         'icon'=>'building-2',    'url'=> "{$urlBase}/area-cliente"],
-        ['key'=>'certificados',  'label'=>'Certificados',            'icon'=>'badge-check',   'url'=> "{$urlBase}/certificados"],
-        ['key'=>'checklist',     'label'=>'Checklist',               'icon'=>'clipboard-check','url'=> "{$urlBase}/checklist"],
+        ['key'=>'root',            'label'=>'Visão Geral',              'icon'=>'bar-chart-3',    'url'=> $hrefVisao],
+        ['key'=>'config',          'label'=>'Configurações',            'icon'=>'settings',       'url'=> "{$urlBase}/config"],
+        ['key'=>'cronograma',      'label'=>'Cronograma',               'icon'=>'calendar',       'url'=> "{$urlBase}/cronograma"],
+
+        // Novos rótulos mantendo as rotas existentes
+        ['key'=>'impugnacoes',     'label'=>'Impugnações do Edital',    'icon'=>'file-warning',   'url'=> "{$urlBase}/impugnacoes"],
+        ['key'=>'divulgacoes',     'label'=>'Respostas e Resultados',   'icon'=>'megaphone',      'url'=> "{$urlBase}/divulgacoes"],
+
+        ['key'=>'anexos',          'label'=>'Anexos',                   'icon'=>'paperclip',      'url'=> "{$urlBase}/anexos"],
+        ['key'=>'vagas',           'label'=>'Vagas',                    'icon'=>'briefcase',      'url'=> "{$urlBase}/vagas"],
+        ['key'=>'cidades',         'label'=>'Cidade de Provas',         'icon'=>'map-pin',        'url'=> "{$urlBase}/cidades"],
+        ['key'=>'inscricoes',      'label'=>'Inscrições',               'icon'=>'user-plus',      'url'=> "{$urlBase}/inscricoes"],
+        ['key'=>'documentos',      'label'=>'Documentos',               'icon'=>'file-text',      'url'=> "{$urlBase}/documentos"],
+
+        // Renomeado (rota permanece /divergencias)
+        ['key'=>'divergencias',    'label'=>'Alterações de Cadastro',   'icon'=>'alert-triangle', 'url'=> "{$urlBase}/divergencias"],
+
+        ['key'=>'devolucao',       'label'=>'Devolução de Taxa',        'icon'=>'rotate-ccw',     'url'=> "{$urlBase}/devolucao"],
+        ['key'=>'subjudice',       'label'=>'Sub Judice',               'icon'=>'scale',          'url'=> "{$urlBase}/subjudice"],
+        ['key'=>'etapas',          'label'=>'Etapas',                   'icon'=>'layers',         'url'=> "{$urlBase}/etapas"],
+        ['key'=>'resultado-final', 'label'=>'Resultado Final',          'icon'=>'trophy',         'url'=> "{$urlBase}/resultado-final"],
+
+        ['key'=>'relatorios',      'label'=>'Relatórios',               'icon'=>'line-chart',     'url'=> "{$urlBase}/relatorios"],
     ];
 @endphp
 

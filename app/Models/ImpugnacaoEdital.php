@@ -3,45 +3,40 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Support\Facades\Schema;
 
 class ImpugnacaoEdital extends Model
 {
-    use HasFactory;
+    /**
+     * Tabela dinâmica (adapta a instalações diferentes).
+     * Tenta, na ordem: impugnacoes, impugnacoes_edital, concurso_impugnacoes.
+     */
+    public function __construct(array $attributes = [])
+    {
+        parent::__construct($attributes);
+        $this->setTable(self::resolveTableName());
+    }
 
-    protected $table = 'impugnacoes_edital';
+    public static function resolveTableName(): string
+    {
+        if (Schema::hasTable('impugnacoes')) return 'impugnacoes';
+        if (Schema::hasTable('impugnacoes_edital')) return 'impugnacoes_edital';
+        if (Schema::hasTable('concurso_impugnacoes')) return 'concurso_impugnacoes';
+        // fallback seguro
+        return 'impugnacoes';
+    }
 
-    protected $fillable = [
-        'concurso_id',
-        'nome',
-        'email',
-        'cpf',
-        'telefone',
-        'endereco',
-        'texto',
-        'anexo_path',
-        'situacao',              // pendente|deferido|indeferido
-        'resposta_texto',
-        'resposta_html',
-        'respondido_em',         // se sua tabela usa responded_at, o accessor abaixo cobre
-        'responded_at',
-    ];
+    protected $guarded = [];
 
     protected $casts = [
-        'respondido_em' => 'datetime',
-        'responded_at'  => 'datetime',
-        'created_at'    => 'datetime',
-        'updated_at'    => 'datetime',
+        'respondida' => 'boolean',
+        'publicada'  => 'boolean',
+        'ativo'      => 'boolean',
     ];
-
-    // compat: usar sempre ->respondido_em na aplicação
-    public function getRespondidoEmAttribute()
-    {
-        return $this->attributes['respondido_em'] ?? $this->attributes['responded_at'] ?? null;
-    }
 
     public function concurso()
     {
-        return $this->belongsTo(Concurso::class, 'concurso_id');
+        // Só funciona se existir a coluna; sem problemas se não existir
+        return $this->belongsTo(Concurso::class);
     }
 }

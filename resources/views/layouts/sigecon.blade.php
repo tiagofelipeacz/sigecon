@@ -52,8 +52,21 @@
     table, th, td{ font-size: var(--fs-md); }
   </style>
 
-  <!-- Estilos do dropdown Configurações -->
+  <!-- Estilos do dropdown Configurações + modo full-width -->
   <style>
+    /* ====== FULL-WIDTH (apenas com body.layout-fluid) ====== */
+    .layout-fluid .container,
+    .layout-fluid .container.inner,
+    .layout-fluid .container.page{
+      max-width: 100% !important;
+      width: 100% !important;
+    }
+    .layout-fluid .container.inner,
+    .layout-fluid .container.page{
+      padding-left: 24px;
+      padding-right: 24px;
+    }
+
     /* Alinhamento do topo */
     .topbar .nav{
       display:flex;
@@ -82,6 +95,7 @@
       font-weight:600;
       border-radius:8px;
     }
+
     /* Hover/active como os demais links em topbar escura */
     .topbar .nav .dd > .dd-toggle:hover,
     .topbar .nav .dd.open > .dd-toggle,
@@ -111,29 +125,46 @@
       color:#0f172a; text-decoration:none; white-space:nowrap;
     }
     .nav .dd .dd-item:hover{ background:#f3f4f6; }
-      /* Deixa o toggle EXACTAMENTE igual aos demais links do topo */
-.topbar .nav > a,
-.topbar .nav .dd > .dd-toggle{
-  color: rgba(255,255,255,.85);   /* mesmo tom dos links */
-  font-weight: 600;               /* igual ao resto do menu */
-  padding: .4rem .6rem;
-  border-radius: 8px;
-}
 
-/* Mesmo hover/ativo dos links */
-.topbar .nav > a:hover,
-.topbar .nav .dd > .dd-toggle:hover,
-.topbar .nav .dd.open > .dd-toggle,
-.topbar .nav .dd:focus-within > .dd-toggle{
-  color: #fff;
-  background: rgba(255,255,255,.08);
-}
-
+    /* Deixa o toggle EXACTAMENTE igual aos demais links do topo */
+    .topbar .nav > a,
+    .topbar .nav .dd > .dd-toggle{
+      color: rgba(255,255,255,.85);
+      font-weight: 600;
+      padding: .4rem .6rem;
+      border-radius: 8px;
+    }
+    .topbar .nav > a:hover,
+    .topbar .nav .dd > .dd-toggle:hover,
+    .topbar .nav .dd.open > .dd-toggle,
+    .topbar .nav .dd:focus-within > .dd-toggle{
+      color: #fff;
+      background: rgba(255,255,255,.08);
+    }
   </style>
 
-
+  <!-- SÓ o botão "Sair" (não afeta o menu Configurações) -->
+  <style>
+    .topbar .nav .auth a.btn[onclick*="logout-form"]{
+      background: transparent !important;
+      border: 0 !important;
+      color: rgba(255,255,255,.85) !important;
+      font-weight: 600;
+      padding: .4rem .6rem;
+      border-radius: 8px;
+      line-height: 1;
+      text-decoration: none;
+    }
+    .topbar .nav .auth a.btn[onclick*="logout-form"]:hover,
+    .topbar .nav .auth a.btn[onclick*="logout-form"]:focus{
+      color: #fff !important;
+      background: rgba(255,255,255,.08) !important;
+      outline: none;
+    }
+  </style>
 </head>
-<body>
+
+<body class="layout-fluid">
   @php
     use Illuminate\Support\Facades\Route;
 
@@ -147,13 +178,19 @@
 
     // URLs do dropdown "Configurações"
     $urlConfigIndex        = $href(['admin.config.index'],                             '/admin/config');
-     $urlTiposIsencao       = $href(['admin.config.tipos-isencao.index'],              '/admin/config/tipos-isencao');
+    $urlTiposIsencao       = $href(['admin.config.tipos-isencao.index'],              '/admin/config/tipos-isencao');
     $urlCondicoesEspeciais = $href([
                                   'admin.config.condicoes-especiais.index',
                                   'admin.config.condicoes_especiais.index',
                                 ],                                                    '/admin/config/condicoes-especiais');
     $urlNiveisEscolaridade = $href(['admin.config.niveis-escolaridade.index'],        '/admin/config/niveis-escolaridade');
     $urlTiposVagasEsp      = $href(['admin.config.tipos-vagas-especiais.index'],      '/admin/config/tipos-vagas-especiais');
+
+    // NOVO: Grupo de Anexos
+    $urlGruposAnexos       = $href([
+                                  'admin.config.grupos-anexos.index',
+                                  'admin.config.grupos_anexos.index',
+                                ],                                                    '/admin/config/grupos-anexos');
 
     // Itens opcionais
     $urlUsuarios           = $href(['admin.users.index','admin.usuarios.index'],      '/admin/usuarios');
@@ -174,8 +211,8 @@
         <a href="{{ url('/admin/clientes') }}">Clientes</a>
         <a href="{{ url('/admin/candidatos') }}">Candidatos</a>
         <a href="#">Site</a>
-        <a href="#">Publicidade</a>
-        <a href="#">Ferramentas</a>
+       <!--  <a href="#">Publicidade</a>
+        <a href="#">Ferramentas</a> -->
 
         {{-- Dropdown: Configurações (sem navegação no toggle) --}}
         <div class="dd" data-dd>
@@ -184,10 +221,11 @@
           </button>
           <div class="dd-panel" role="menu" aria-label="Configurações">
             <a class="dd-item" href="{{ $urlUsuarios }}">Usuários</a>
-             <a class="dd-item" href="{{ $urlTiposIsencao }}">Tipos de Isenção</a>
+            <a class="dd-item" href="{{ $urlTiposIsencao }}">Tipos de Isenção</a>
             <a class="dd-item" href="{{ $urlCondicoesEspeciais }}">Tipos de Condições Especiais</a>
             <a class="dd-item" href="{{ $urlNiveisEscolaridade }}">Níveis de Escolaridade</a>
             <a class="dd-item" href="{{ $urlTiposVagasEsp }}">Tipos de Vagas Especiais</a>
+            <a class="dd-item" href="{{ $urlGruposAnexos }}">Grupo de Anexos</a>
             <a class="dd-item" href="{{ $urlEmailsAuto }}">E-mails Automáticos</a>
             <a class="dd-item" href="{{ $urlFormasPagto }}">Formas de Pagamento</a>
             <a class="dd-item" href="{{ $urlModelosResp }}">Modelos de Respostas</a>

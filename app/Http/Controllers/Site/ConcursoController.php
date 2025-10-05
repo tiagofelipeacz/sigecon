@@ -19,10 +19,8 @@ class ConcursoController extends Controller
         $q      = trim((string) $request->input('q', ''));
         $status = (string) $request->input('status', 'todos');
 
-        // carrega todas as variações de relacionamento de cliente que seu projeto usa
         $query = Concurso::query()->with(['client','clientLegacy','clientAlt','clientPlural']);
 
-        // Busca por título/nome/legendas/descrição (mantido)
         if ($q !== '') {
             $like = "%{$q}%";
             $query->where(function ($x) use ($like) {
@@ -34,7 +32,6 @@ class ConcursoController extends Controller
             });
         }
 
-        // Filtro de status (aceita 'status' OU 'situacao') — mantido
         if ($status !== '' && $status !== 'todos') {
             $query->where(function ($x) use ($status) {
                 $x->where('status', $status)
@@ -42,13 +39,11 @@ class ConcursoController extends Controller
             });
         }
 
-        // Mantém o comportamento atual com paginação
         $concursos = (clone $query)
             ->orderByDesc('created_at')
             ->paginate(12)
             ->appends($request->query());
 
-        // Agrupamentos extras opcionais para a vitrine pública (não quebra nada)
         $todos = (clone $query)->orderByDesc('created_at')->get();
 
         $agora    = now();
@@ -74,10 +69,9 @@ class ConcursoController extends Controller
         $encerrados = $todos->diff($abertos)->diff($andamento);
 
         return view('site.concursos.index', [
-            'concursos'  => $concursos, // mantém compatibilidade com view antiga
+            'concursos'  => $concursos,
             'q'          => $q,
             'status'     => $status,
-            // novos grupos opcionais para a vitrine
             'abertos'    => $abertos,
             'andamento'  => $andamento,
             'encerrados' => $encerrados,
@@ -86,18 +80,14 @@ class ConcursoController extends Controller
 
     /**
      * GET /concursos/{concurso} – detalhes públicos
-     * Usa Route-Model Binding no parâmetro {concurso}
      */
     public function show(Concurso $concurso)
     {
-        // garante cliente carregado independente do alias usado no modelo
         $concurso->loadMissing(['client','clientLegacy','clientAlt','clientPlural']);
 
         // =========================
         // VAGAS (cargos + locais)
         // =========================
-
-        // Tabela/colunas opcionais
         $hasCodigoCargo     = Schema::hasColumn('concursos_vagas_cargos', 'codigo');
         $hasNivelColCargo   = Schema::hasColumn('concursos_vagas_cargos', 'nivel');
         $hasNivelIdCargo    = Schema::hasColumn('concursos_vagas_cargos', 'nivel_id');
@@ -111,13 +101,11 @@ class ConcursoController extends Controller
         $usaLocalString = Schema::hasColumn('concursos_vagas_itens', 'local');
         $hasVagasTotais = Schema::hasColumn('concursos_vagas_itens', 'vagas_totais');
 
-        // Tipos de cotas (para exibir nomes)
         $tipos = DB::table('tipos_vagas_especiais')
             ->when(Schema::hasColumn('tipos_vagas_especiais', 'ativo'), fn($q) => $q->where('ativo', 1))
             ->orderBy('nome')
-            ->pluck('nome', 'id'); // [tipo_id => nome]
+            ->pluck('nome', 'id');
 
-        // CARGOS do concurso
         $cargosQ = DB::table('concursos_vagas_cargos as c')
             ->where('c.concurso_id', $concurso->id);
 
@@ -139,7 +127,6 @@ class ConcursoController extends Controller
             ($hasDescCargo       ? ', c.descricao_cargo' : ', NULL as descricao_cargo')
         )->orderBy('c.nome')->get();
 
-        // ITENS (locais) + totais
         $subTotCotas = DB::raw("
             (SELECT item_id, SUM(vagas) AS total_cotas
              FROM concursos_vagas_cotas
@@ -163,7 +150,6 @@ class ConcursoController extends Controller
             ->orderBy('local_nome')
             ->get();
 
-        // COTAS por item
         $cotasRaw = DB::table('concursos_vagas_cotas')
             ->whereIn('item_id', $itens->pluck('id')->all() ?: [0])
             ->get();
@@ -173,8 +159,7 @@ class ConcursoController extends Controller
             $cotasPorItem[$r->item_id][(int)$r->tipo_id] = (int)$r->vagas;
         }
 
-        // Monta estrutura por cargo (mantendo seu layout, só alimenta dados)
-        $vagas = []; // cada entrada = cargo com seus locais
+        $vagas = [];
         foreach ($cargos as $c) {
             $nivel = $c->nivel_texto ?: $c->nivel_nome;
             $valor = (float) $c->valor;
@@ -217,19 +202,71 @@ class ConcursoController extends Controller
         }
 
         // =========================
-        // ANEXOS (quadro lateral)
+        // ANEXOS (quadro lateral) — públicos
         // =========================
         $anexos = [];
+        $agora = Carbon::now();
 
         if (Schema::hasTable('concursos_anexos')) {
             $rows = DB::table('concursos_anexos')
                 ->where('concurso_id', $concurso->id)
                 ->when(Schema::hasColumn('concursos_anexos','ativo'), fn($q)=>$q->where('ativo',1))
-                ->orderByRaw(Schema::hasColumn('concursos_anexos','ordem') ? 'ordem asc, id asc' : 'id asc')
+                ->when(Schema::hasColumn('concursos_anexos','restrito'), fn($q)=>$q->where('restrito',0)) // NÃO mostra restritos no público
+                ->orderByRaw(Schema::hasColumn('concursos_anexos','posicao') ? 'posicao asc, id asc' : (Schema::hasColumn('concursos_anexos','ordem') ? 'ordem asc, id asc' : 'id asc'))
                 ->get();
+
             foreach ($rows as $r) {
+                // Visibilidade por data (se existir); caso não exista, trata como indeterminado (visível)
+                $mostrar = true;
+                $temInd  = Schema::hasColumn('concursos_anexos','tempo_indeterminado');
+                $temDe   = Schema::hasColumn('concursos_anexos','visivel_de');
+                $temAte  = Schema::hasColumn('concursos_anexos','visivel_ate');
+
+                if ($temInd || $temDe || $temAte) {
+                    $ind = $temInd ? ((int)($r->tempo_indeterminado ?? 0) === 1) : false;
+                    $de  = $temDe  ? $r->visivel_de  : null;
+                    $ate = $temAte ? $r->visivel_ate : null;
+
+                    if (!$ind && ($de || $ate)) {
+                        $inicio = $de  ? Carbon::parse($de)  : null;
+                        $fim    = $ate ? Carbon::parse($ate) : null;
+
+                        if ($inicio && $fim) {
+                            $mostrar = $agora->between($inicio, $fim);
+                        } elseif ($inicio && !$fim) {
+                            $mostrar = $agora->greaterThanOrEqualTo($inicio);
+                        } elseif (!$inicio && $fim) {
+                            $mostrar = $agora->lessThanOrEqualTo($fim);
+                        }
+                    }
+                }
+
+                if (!$mostrar) continue;
+
                 $titulo = $r->titulo ?? $r->nome ?? 'Documento';
-                $url    = $r->url    ?? $r->arquivo ?? null;
+                $tipo   = (string)($r->tipo ?? '');
+                $url    = null;
+
+                if ($tipo === 'link') {
+                    $url = $r->link_url ?? $r->url ?? null;
+                } else {
+                    $path = $r->arquivo_path ?? $r->arquivo ?? $r->path ?? null;
+                    if ($path) {
+                        $p = str_replace('\\','/',$path);
+                        if (str_starts_with($p, 'http://') || str_starts_with($p, 'https://')) {
+                            $url = $p;
+                        } elseif (str_starts_with($p, 'storage/') || str_starts_with($p, '/storage/')) {
+                            $url = asset(ltrim($p,'/'));
+                        } elseif (app('filesystem')->disk('public')->exists($p)) {
+                            $url = app('filesystem')->disk('public')->url($p);
+                        } elseif (file_exists(public_path($p))) {
+                            $url = asset($p);
+                        } elseif (file_exists(public_path('storage/'.$p))) {
+                            $url = asset('storage/'.$p);
+                        }
+                    }
+                }
+
                 if ($url) {
                     $anexos[] = ['titulo'=>$titulo, 'url'=>$url];
                 }
@@ -258,8 +295,8 @@ class ConcursoController extends Controller
 
         return view('site.concursos.show', [
             'concurso' => $concurso,
-            'vagas'    => $vagas,   // <- usado na view para renderizar a tabela mantendo seu layout
-            'anexos'   => $anexos,  // <- quadro de anexos na lateral
+            'vagas'    => $vagas,
+            'anexos'   => $anexos,
         ]);
     }
 }

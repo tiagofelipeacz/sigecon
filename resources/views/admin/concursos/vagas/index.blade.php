@@ -76,7 +76,10 @@
                 : route('admin.concursos.vagas.store', $concurso->id) }}"
               id="formNovoCargo">
           @csrf
-          @if($isEdit) @method('PUT') @endif
+          @if($isEdit)
+            @method('PUT')
+            <input type="hidden" name="cargo_id" value="{{ $df['cargo_id'] }}">
+          @endif
 
           {{-- ORDEM SOLICITADA --}}
           <div class="grid g-3">
@@ -88,7 +91,7 @@
 
             <div>
               <label class="tag">Nível de Escolaridade</label>
-              <select name="nivel_id" class="input" {{ $niveis->count() ? '' : 'disabled' }}>
+              <select name="nivel_id" class="input">
                 <option value="">- Selecionar -</option>
                 @foreach($niveis as $n)
                   <option value="{{ $n->id }}"

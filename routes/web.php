@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
+use Illuminate\Support\FacadesRoute;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -34,6 +34,9 @@ use App\Http\Controllers\Admin\Config\TipoIsencaoController;
 use App\Http\Controllers\Admin\Config\TipoCondicaoEspecialController;
 use App\Http\Controllers\Admin\Config\NiveisEscolaridadeController;
 use App\Http\Controllers\Admin\Config\TiposVagasEspeciaisController;
+
+/* >>> ADICIONADO: Cidades de Prova */
+use App\Http\Controllers\Admin\Concursos\CidadeProvaController;
 
 /**
  * Controllers (área do candidato)
@@ -71,10 +74,6 @@ Route::prefix('admin')->name('admin.')->middleware(['auth'])->group(function () 
         // ===== /Tipos de Condições Especiais =====
     });
 });
-
-
-
-   
 
 Route::resourceVerbs([
     'create' => 'criar',
@@ -205,7 +204,6 @@ Route::prefix('admin')
                 // (Opcional) manter compat: se existir formulário antigo que posta em /vagas/cargos
                 Route::post('vagas/cargos',        [VagaController::class, 'store'])->name('vagas.cargos.store');
 
-
                 // Impugnações
                 Route::get('impugnacoes', [ImpugnacaoController::class, 'index'])->name('impugnacoes.index');
                 Route::get('impugnacoes/{impugnacao}/editar', [ImpugnacaoController::class, 'edit'])->name('impugnacoes.edit');
@@ -218,8 +216,6 @@ Route::prefix('admin')
                 Route::get('isencoes/{pedido}/arquivo', [IsencoesController::class, 'downloadArquivo'])->name('isencoes.arquivo.download');
                 Route::delete('isencoes/{pedido}/arquivo', [IsencoesController::class, 'destroyArquivo'])->name('isencoes.arquivo.destroy');
 
-                // Vagas (já acima)
-
                 // Anexos
                 Route::get('anexos', [ConcursoAnexoController::class, 'index'])->name('anexos.index');
                 Route::get('anexos/criar', [ConcursoAnexoController::class, 'create'])->name('anexos.create');
@@ -227,6 +223,30 @@ Route::prefix('admin')
                 Route::get('anexos/{anexo}/editar', [ConcursoAnexoController::class, 'edit'])->name('anexos.edit');
                 Route::put('anexos/{anexo}', [ConcursoAnexoController::class, 'update'])->name('anexos.update');
                 Route::delete('anexos/{anexo}', [ConcursoAnexoController::class, 'destroy'])->name('anexos.destroy');
+
+                // Anexos: toggles (clique único)
+                Route::patch('anexos/{anexo}/toggle-ativo', [ConcursoAnexoController::class, 'toggleAtivo'])
+                    ->name('anexos.toggle-ativo');
+
+                Route::patch('anexos/{anexo}/toggle-restrito', [ConcursoAnexoController::class, 'toggleRestrito'])
+                    ->name('anexos.toggle-restrito');
+
+                // (Opcional) alias para compatibilidade com a view antiga:
+                Route::patch('anexos/{anexo}/toggle', [ConcursoAnexoController::class, 'toggleAtivo'])
+                    ->name('anexos.toggle');
+
+                /* ============ Cidades de Prova (NOVO) ============ */
+                Route::get('cidades', [CidadeProvaController::class, 'index'])->name('cidades.index');
+                Route::get('cidades/criar', [CidadeProvaController::class, 'create'])->name('cidades.create');
+                Route::post('cidades', [CidadeProvaController::class, 'store'])->name('cidades.store');
+                Route::get('cidades/{cidade}/editar', [CidadeProvaController::class, 'edit'])->name('cidades.edit');
+                Route::put('cidades/{cidade}', [CidadeProvaController::class, 'update'])->name('cidades.update');
+                Route::delete('cidades/{cidade}', [CidadeProvaController::class, 'destroy'])->name('cidades.destroy');
+                /* ================================================ */
+
+                // Impugnações do Edital (seu controller já mapeado acima)
+                // (rotas já declaradas logo acima neste mesmo group)
+                // — nada alterado aqui
             });
 
         // ==============================
@@ -339,7 +359,5 @@ Route::prefix('candidato')->name('candidato.')->group(function () {
         Route::post('/inscricoes', [CandidatoInscricaoController::class, 'store'])->name('inscricoes.store');
         Route::get('/inscricoes/{id}', [CandidatoInscricaoController::class, 'show'])->name('inscricoes.show');
         Route::get('/inscricoes/{id}/comprovante', [CandidatoInscricaoController::class, 'comprovante'])->name('inscricoes.comprovante');
-
-
     });
 });

@@ -1,5 +1,5 @@
 ﻿@extends('layouts.auth')
-@section('title', 'Entrar — SIGECON')
+@section('title', 'Entrar - SIGECON')
 
 @section('content')
   <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
