@@ -102,7 +102,7 @@
             @foreach ($itens as $it)
               <div class="grid-2 mb-2" style="align-items:center;">
                 <div class="text-muted">
-                  #{{ $it->id }} — {{ $it->titulo }}
+                  #{{ $it->id }} - {{ $it->titulo }}
                 </div>
                 <div style="justify-self:end; display:flex; align-items:center; gap:6px;">
                   <label class="label" style="margin:0;">Ordem</label>
@@ -138,7 +138,7 @@
           <tbody>
             @forelse ($itens as $it)
               @php
-                $ini = $it->inicio ? \Carbon\Carbon::parse($it->inicio)->format('d/m/Y H:i') : '—';
+                $ini = $it->inicio ? \Carbon\Carbon::parse($it->inicio)->format('d/m/Y H:i') : '-';
                 $fim = $it->fim    ? \Carbon\Carbon::parse($it->fim)->format('d/m/Y H:i')    : null;
                 $periodo = $fim ? "{$ini} → {$fim}" : $ini;
               @endphp
@@ -151,7 +151,7 @@
                     <div class="text-muted" style="font-size:12px; margin-top:4px;">{!! nl2br(e($it->descricao)) !!}</div>
                   @endif
                 </td>
-                <td>{{ $it->local ?: '—' }}</td>
+                <td>{{ $it->local ?: '-' }}</td>
                 <td>
                   <form method="POST" action="{{ route('admin.concursos.cronograma.toggle', [$concurso, $it]) }}">
                     @csrf

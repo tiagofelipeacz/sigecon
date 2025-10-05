@@ -11,138 +11,78 @@ use Illuminate\Support\Facades\Schema;
 class ImpugnacaoController extends Controller
 {
     /**
-     * Lista de impugnações.
+     * GET /admin/concursos/{concurso}/impugnacoes
      */
-    public function index(Concurso $concurso, Request $req)
+    public function index(Request $request, Concurso $concurso)
     {
-        $q     = trim((string) $req->get('q', ''));
-        $sit   = (string) $req->get('sit', '');   // '' | 'pendente' | 'respondida'
-        $pub   = (string) $req->get('pub', '');   // '' | '1' | '0'
-        $ativo = (string) $req->get('ativo', ''); // '' | '1' | '0'
+        $q        = trim((string) $request->input('q', ''));
+        $situacao = (string) $request->input('situacao', '');
 
-        $table = ImpugnacaoEdital::resolveTableName();
+        $query = ImpugnacaoEdital::query()->where('concurso_id', $concurso->id);
 
-        $rows = ImpugnacaoEdital::query()
-            ->when(Schema::hasColumn($table, 'concurso_id'), function ($w) use ($concurso) {
-                $w->where('concurso_id', $concurso->id);
-            })
-            ->when($q !== '', function ($w) use ($q) {
-                $like = "%{$q}%";
-                $w->where(function ($x) use ($like) {
-                    $x->orWhere('protocolo', 'like', $like)
-                      ->orWhere('numero', 'like', $like)
-                      ->orWhere('codigo', 'like', $like)
-                      ->orWhere('nome', 'like', $like)
-                      ->orWhere('remetente_nome', 'like', $like)
-                      ->orWhere('autor_nome', 'like', $like)
-                      ->orWhere('email', 'like', $like)
-                      ->orWhere('remetente_email', 'like', $like)
-                      ->orWhere('autor_email', 'like', $like)
-                      ->orWhere('mensagem', 'like', $like)
-                      ->orWhere('texto', 'like', $like)
-                      ->orWhere('descricao', 'like', $like);
-                });
-            })
-            ->when($sit !== '', function ($w) use ($sit) {
-                if ($sit === 'pendente') {
-                    $w->where(function ($x) {
-                        $x->where('respondida', 0)->orWhereNull('respondida')
-                          ->orWhere('respondido', 0)->orWhereNull('respondido')
-                          ->orWhere('status_respondido', 0)->orWhereNull('status_respondido');
-                    });
-                } elseif ($sit === 'respondida') {
-                    $w->where(function ($x) {
-                        $x->where('respondida', 1)
-                          ->orWhere('respondido', 1)
-                          ->orWhere('status_respondido', 1);
-                    });
-                }
-            })
-            ->when($pub !== '', function ($w) use ($pub) {
-                $val = (int) $pub;
-                $w->where(function ($x) use ($val) {
-                    $x->where('publicada', $val)
-                      ->orWhere('publicar', $val)
-                      ->orWhere('status_publicado', $val);
-                });
-            })
-            ->when($ativo !== '' && Schema::hasColumn($table, 'ativo'), function ($w) use ($ativo) {
-                $w->where('ativo', (int) $ativo);
-            })
-            ->orderByDesc('id')
-            ->paginate(20);
+        if ($q !== '') {
+            $like = "%{$q}%";
+            $query->where(function ($w) use ($like) {
+                $w->where('nome', 'like', $like)
+                  ->orWhere('email', 'like', $like)
+                  ->orWhere('cpf', 'like', $like)
+                  ->orWhere('texto', 'like', $like);
+            });
+        }
 
-        return view('admin.concursos.impugnacoes.index', compact('concurso', 'rows', 'q', 'sit', 'pub', 'ativo'));
+        if (in_array($situacao, ['pendente','deferido','indeferido'], true)) {
+            $query->where('situacao', $situacao);
+        }
+
+        $impugnacoes = $query->orderByDesc('created_at')
+            ->paginate(20)->withQueryString();
+
+        return view('admin.concursos.impugnacoes.index', [
+            'concurso'    => $concurso,
+            'impugnacoes' => $impugnacoes,
+            'q'           => $q,
+            'situacao'    => $situacao,
+        ]);
     }
 
     /**
-     * Form de edição.
+     * GET /admin/concursos/{concurso}/impugnacoes/{impugnacao}/editar
      */
     public function edit(Concurso $concurso, ImpugnacaoEdital $impugnacao)
     {
-        $this->assertOwner($concurso, $impugnacao);
-        return view('admin.concursos.impugnacoes.edit', [
-            'concurso'    => $concurso,
-            'impugnacao'  => $impugnacao,
-        ]);
+        abort_if($impugnacao->concurso_id !== $concurso->id, 404);
+        return view('admin.concursos.impugnacoes.edit', compact('concurso', 'impugnacao'));
     }
 
     /**
-     * Atualiza campos básicos (respondida/publicada/ativo/resposta).
+     * PUT /admin/concursos/{concurso}/impugnacoes/{impugnacao}
      */
-    public function update(Concurso $concurso, ImpugnacaoEdital $impugnacao, Request $req)
+    public function update(Request $request, Concurso $concurso, ImpugnacaoEdital $impugnacao)
     {
-        $this->assertOwner($concurso, $impugnacao);
+        abort_if($impugnacao->concurso_id !== $concurso->id, 404);
 
-        $data = $req->validate([
-            'respondida' => ['nullable', 'in:0,1'],
-            'publicada'  => ['nullable', 'in:0,1'],
-            'ativo'      => ['nullable', 'in:0,1'],
-            'resposta'   => ['nullable', 'string'],
+        $data = $request->validate([
+            'situacao' => 'required|in:pendente,deferido,indeferido',
+            'resposta' => 'nullable|string',
         ]);
 
-        $respondida = filter_var($req->input('respondida', 0), FILTER_VALIDATE_BOOLEAN);
-        $publicada  = filter_var($req->input('publicada', 0), FILTER_VALIDATE_BOOLEAN);
-        $ativo      = filter_var($req->input('ativo', 1), FILTER_VALIDATE_BOOLEAN);
-        $resposta   = (string) $req->input('resposta', '');
+        $impugnacao->situacao       = $data['situacao'];
+        $impugnacao->resposta_texto = $data['resposta'] ?? null;
+        $impugnacao->resposta_html  = $data['resposta'] ?? null;
 
-        $tbl = $impugnacao->getTable();
-        $update = [];
+        // seta responded_at/respondido_em (compatível com os dois nomes de coluna)
+        $now = now();
+        if (Schema::hasColumn($impugnacao->getTable(), 'respondido_em')) {
+            $impugnacao->respondido_em = in_array($data['situacao'], ['deferido','indeferido'], true) ? $now : null;
+        }
+        if (Schema::hasColumn($impugnacao->getTable(), 'responded_at')) {
+            $impugnacao->responded_at = in_array($data['situacao'], ['deferido','indeferido'], true) ? $now : null;
+        }
 
-        // respondida -> respondido -> status_respondido
-        if (Schema::hasColumn($tbl, 'respondida'))          $update['respondida']        = $respondida;
-        elseif (Schema::hasColumn($tbl, 'respondido'))      $update['respondido']        = $respondida;
-        elseif (Schema::hasColumn($tbl, 'status_respondido')) $update['status_respondido'] = $respondida;
-
-        // publicada -> publicar -> status_publicado
-        if (Schema::hasColumn($tbl, 'publicada'))           $update['publicada']         = $publicada;
-        elseif (Schema::hasColumn($tbl, 'publicar'))        $update['publicar']          = $publicada;
-        elseif (Schema::hasColumn($tbl, 'status_publicado'))$update['status_publicado']  = $publicada;
-
-        // ativo
-        if (Schema::hasColumn($tbl, 'ativo'))               $update['ativo']             = $ativo;
-
-        // resposta -> resposta_texto
-        if (Schema::hasColumn($tbl, 'resposta'))            $update['resposta']          = $resposta;
-        elseif (Schema::hasColumn($tbl, 'resposta_texto'))  $update['resposta_texto']    = $resposta;
-
-        $impugnacao->fill($update)->save();
+        $impugnacao->save();
 
         return redirect()
-            ->route('admin.concursos.impugnacoes.edit', [$concurso, $impugnacao->id])
-            ->with('status', 'Impugnação atualizada com sucesso!');
-    }
-
-    /**
-     * Garante que pertence ao concurso (quando existir a coluna).
-     */
-    private function assertOwner(Concurso $concurso, ImpugnacaoEdital $impugnacao): void
-    {
-        $tbl = $impugnacao->getTable();
-        if (Schema::hasColumn($tbl, 'concurso_id')) {
-            if ((int) $impugnacao->concurso_id !== (int) $concurso->id) {
-                abort(404);
-            }
-        }
+            ->route('admin.concursos.impugnacoes.index', $concurso)
+            ->with('success', 'Impugnação atualizada com sucesso.');
     }
 }

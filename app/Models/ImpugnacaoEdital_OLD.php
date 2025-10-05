@@ -2,8 +2,8 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
 
 class ImpugnacaoEdital extends Model
 {
@@ -17,27 +17,45 @@ class ImpugnacaoEdital extends Model
         'email',
         'cpf',
         'telefone',
+        'telefone_alt',
         'endereco',
         'texto',
         'anexo_path',
-        'situacao',              // pendente|deferido|indeferido
+        'situacao',          // pendente|deferido|indeferido
         'resposta_texto',
         'resposta_html',
-        'respondido_em',         // se sua tabela usa responded_at, o accessor abaixo cobre
+        'resposta',
+        'respondido_em',
         'responded_at',
+        'data_resposta',
     ];
 
     protected $casts = [
         'respondido_em' => 'datetime',
         'responded_at'  => 'datetime',
+        'data_resposta' => 'datetime',
         'created_at'    => 'datetime',
         'updated_at'    => 'datetime',
     ];
 
-    // compat: usar sempre ->respondido_em na aplicação
-    public function getRespondidoEmAttribute()
+    /**
+     * Helper para obter o nome da tabela (útil se quiser usar em Schema::hasColumn etc.)
+     */
+    public static function tableName(): string
     {
-        return $this->attributes['respondido_em'] ?? $this->attributes['responded_at'] ?? null;
+        return (new static)->getTable();
+    }
+
+    /**
+     * Accessor de compatibilidade: usar sempre ->respondido_em
+     */
+    public function getRespondidoEmAttribute($value)
+    {
+        if ($value) {
+            return $value;
+        }
+        // se a coluna responded_at tiver valor, retorna
+        return $this->attributes['responded_at'] ?? null;
     }
 
     public function concurso()

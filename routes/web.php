@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Support\FacadesRoute;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -208,6 +208,9 @@ Route::prefix('admin')
                 Route::get('impugnacoes', [ImpugnacaoController::class, 'index'])->name('impugnacoes.index');
                 Route::get('impugnacoes/{impugnacao}/editar', [ImpugnacaoController::class, 'edit'])->name('impugnacoes.edit');
                 Route::put('impugnacoes/{impugnacao}', [ImpugnacaoController::class, 'update'])->name('impugnacoes.update');
+
+                // 🔧 Compat: permite SUBMIT via POST em /impugnacoes/{impugnacao}/editar chamando update()
+                Route::post('impugnacoes/{impugnacao}/editar', [ImpugnacaoController::class, 'update'])->name('impugnacoes.editar.post');
 
                 // Inscrições -> Isenções
                 Route::get('isencoes', [IsencoesController::class, 'index'])->name('isencoes.index');

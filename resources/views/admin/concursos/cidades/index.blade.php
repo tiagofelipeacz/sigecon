@@ -84,9 +84,9 @@
           <tbody>
           @forelse($rows as $r)
             <tr>
-              <td>{{ $r->cidade ?? '—' }}</td>
-              <td>{{ $r->uf ?? '—' }}</td>
-              <td class="muted">{{ $r->cargos_lista ?: '—' }}</td>
+              <td>{{ $r->cidade ?? '-' }}</td>
+              <td>{{ $r->uf ?? '-' }}</td>
+              <td class="muted">{{ $r->cargos_lista ?: '-' }}</td>
               <td class="w-acoes">
                 <a class="btn" href="{{ route('admin.concursos.cidades.edit', [$concurso, $r->id]) }}">
                   <i data-lucide="edit-3"></i> Editar
