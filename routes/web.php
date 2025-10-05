@@ -26,6 +26,11 @@ use App\Http\Controllers\Admin\Concursos\VisaoGeralController;          // Visã
 use App\Http\Controllers\Admin\ConcursoAnexoController;                 // Anexos
 use App\Http\Controllers\Admin\CandidatoController;                     // Base de Candidatos
 use App\Http\Controllers\Admin\Concursos\CronogramaController;          // Cronogramas
+/* >>> ADICIONADO: Cidades de Prova */
+use App\Http\Controllers\Admin\Concursos\CidadeProvaController;
+/* >>> ADICIONADO: Gestão de Inscritos (lista, nova, importar, extras) */
+use App\Http\Controllers\Admin\Concursos\InscritosController;
+
 /**
  * Controllers (admin -> configurações)
  */
@@ -34,9 +39,6 @@ use App\Http\Controllers\Admin\Config\TipoIsencaoController;
 use App\Http\Controllers\Admin\Config\TipoCondicaoEspecialController;
 use App\Http\Controllers\Admin\Config\NiveisEscolaridadeController;
 use App\Http\Controllers\Admin\Config\TiposVagasEspeciaisController;
-
-/* >>> ADICIONADO: Cidades de Prova */
-use App\Http\Controllers\Admin\Concursos\CidadeProvaController;
 
 /**
  * Controllers (área do candidato)
@@ -212,6 +214,31 @@ Route::prefix('admin')
                 // 🔧 Compat: permite SUBMIT via POST em /impugnacoes/{impugnacao}/editar chamando update()
                 Route::post('impugnacoes/{impugnacao}/editar', [ImpugnacaoController::class, 'update'])->name('impugnacoes.editar.post');
 
+                /* ====================================================
+                 * INSCRITOS (Gestão no Admin)
+                 * Base: /admin/concursos/{concurso}/inscritos
+                 * ==================================================== */
+                // Lista
+                Route::get('inscritos',                 [InscritosController::class, 'index'])->name('inscritos.index');
+                // Nova inscrição (form e store)
+                Route::get('inscritos/nova',            [InscritosController::class, 'create'])->name('inscritos.create');
+                Route::post('inscritos',                [InscritosController::class, 'store'])->name('inscritos.store');
+                // Importação
+                Route::get('inscritos/importar',        [InscritosController::class, 'importar'])->name('inscritos.importar');
+                Route::post('inscritos/importar',       [InscritosController::class, 'importarStore'])->name('inscritos.importar.store');
+                Route::get('inscritos/importar/modelo', [InscritosController::class, 'importarModelo'])->name('inscritos.importar.modelo');
+                // Dados extras
+                Route::get('inscritos/extras',          [InscritosController::class, 'extras'])->name('inscritos.extras');
+                Route::post('inscritos/extras',         [InscritosController::class, 'extrasStore'])->name('inscritos.extras.store');
+                Route::delete('inscritos/extras/{chave}', [InscritosController::class, 'extrasDestroy'])->name('inscritos.extras.destroy');
+
+                // 🔁 Alias: /inscricoes -> redireciona para /inscritos (apenas índice)
+                Route::get('inscricoes', function ($concurso) {
+                    return redirect()->route('admin.concursos.inscritos.index', $concurso);
+                })->name('inscricoes.index');
+
+                /* ==================================================== */
+
                 // Inscrições -> Isenções
                 Route::get('isencoes', [IsencoesController::class, 'index'])->name('isencoes.index');
                 Route::get('isencoes/{pedido}/editar', [IsencoesController::class, 'edit'])->name('isencoes.edit');
@@ -354,7 +381,7 @@ Route::prefix('candidato')->name('candidato.')->group(function () {
         Route::get('/documentos/{documento}/arquivo', [CandidatoDocumentoController::class, 'open'])->name('documentos.open');
         Route::delete('/documentos/{documento}', [CandidatoDocumentoController::class, 'destroy'])->name('documentos.destroy');
 
-        // Inscrições
+        // Inscrições (área do candidato)
         Route::get('/inscricoes', [CandidatoInscricaoController::class, 'index'])->name('inscricoes.index');
         Route::get('/inscricoes/nova', [CandidatoInscricaoController::class, 'create'])->name('inscricoes.create');
         Route::get('/inscricoes/cargos/{concurso}', [CandidatoInscricaoController::class, 'cargos'])->name('inscricoes.cargos');
