@@ -15,7 +15,7 @@ use App\Http\Controllers\Site\ConcursoController as PublicConcursoController;
 /**
  * Controllers (admin)
  */
-use App\Http\Controllers\Admin\HomeController as AdminHomeController;   // <<< import correto do dashboard raiz
+use App\Http\Controllers\Admin\HomeController as AdminHomeController;   // dashboard raiz
 use App\Http\Controllers\Admin\InicioController;                        // página "Início" (lista estilizada)
 use App\Http\Controllers\Admin\ClientController;
 use App\Http\Controllers\Admin\ConcursoController;
@@ -26,10 +26,9 @@ use App\Http\Controllers\Admin\Concursos\VisaoGeralController;          // Visã
 use App\Http\Controllers\Admin\ConcursoAnexoController;                 // Anexos
 use App\Http\Controllers\Admin\CandidatoController;                     // Base de Candidatos
 use App\Http\Controllers\Admin\Concursos\CronogramaController;          // Cronogramas
-/* >>> ADICIONADO: Cidades de Prova */
-use App\Http\Controllers\Admin\Concursos\CidadeProvaController;
-/* >>> ADICIONADO: Gestão de Inscritos (lista, nova, importar, extras) */
-use App\Http\Controllers\Admin\Concursos\InscritosController;
+use App\Http\Controllers\Admin\Concursos\CidadeProvaController;         // Cidades de Prova
+use App\Http\Controllers\Admin\Concursos\InscritosController;           // Inscritos (lista/nova/store/etc)
+use App\Http\Controllers\Admin\Concursos\InscritosImportController;     // Importação de Inscritos (show/handle)
 
 /**
  * Controllers (admin -> configurações)
@@ -168,11 +167,14 @@ Route::prefix('admin')
         Route::patch('concursos/{concurso}/toggle-ativo', [ConcursoController::class, 'toggleAtivo'])
             ->name('concursos.toggleAtivo');
 
+        // -------------------------------------------------
         // Rotas por concurso
+        // -------------------------------------------------
         Route::prefix('concursos/{concurso}')
             ->name('concursos.')
             ->group(function () {
-                // Visão Geral (DASHBOARD) — rota própria
+
+                // Visão Geral (DASHBOARD)
                 Route::get('visao-geral', [VisaoGeralController::class, 'index'])->name('visao-geral');
 
                 // Cronograma
@@ -188,56 +190,28 @@ Route::prefix('admin')
                 Route::get('vagas/criar',          [VagaController::class, 'create'])->name('vagas.create');
                 Route::post('vagas',               [VagaController::class, 'store'])->name('vagas.store');
 
-                // Editar/Atualizar cargo (usa a mesma tela do create com defaults)
+                // Editar/Atualizar cargo
                 Route::get('vagas/editar/{cargo}', [VagaController::class, 'edit'])->name('vagas.edit');
                 Route::put('vagas/{cargo}',        [VagaController::class, 'update'])->name('vagas.update');
 
-                // Remover (item e cargo)
-                Route::delete('vagas/itens/{item}',  [VagaController::class, 'destroyItem'])->name('vagas.itens.destroy');
-                Route::delete('vagas/cargos/{cargo}',[VagaController::class, 'destroyCargo'])->name('vagas.cargos.destroy');
+                // Remover item/cargo
+                Route::delete('vagas/itens/{item}', [VagaController::class, 'destroyItem'])->name('vagas.itens.destroy');
+                Route::delete('vagas/cargos/{cargo}', [VagaController::class, 'destroyCargo'])->name('vagas.cargos.destroy');
 
                 // Reordenar itens
                 Route::post('vagas/reordenar',     [VagaController::class, 'reorder'])->name('vagas.reorder');
 
-                // Importação CSV
+                // Importação CSV (Vagas)
                 Route::get('vagas/importar',       [VagaController::class, 'importForm'])->name('vagas.import');
                 Route::post('vagas/importar',      [VagaController::class, 'importStore'])->name('vagas.import.store');
 
-                // (Opcional) manter compat: se existir formulário antigo que posta em /vagas/cargos
                 Route::post('vagas/cargos',        [VagaController::class, 'store'])->name('vagas.cargos.store');
 
                 // Impugnações
                 Route::get('impugnacoes', [ImpugnacaoController::class, 'index'])->name('impugnacoes.index');
                 Route::get('impugnacoes/{impugnacao}/editar', [ImpugnacaoController::class, 'edit'])->name('impugnacoes.edit');
                 Route::put('impugnacoes/{impugnacao}', [ImpugnacaoController::class, 'update'])->name('impugnacoes.update');
-
-                // 🔧 Compat: permite SUBMIT via POST em /impugnacoes/{impugnacao}/editar chamando update()
                 Route::post('impugnacoes/{impugnacao}/editar', [ImpugnacaoController::class, 'update'])->name('impugnacoes.editar.post');
-
-                /* ====================================================
-                 * INSCRITOS (Gestão no Admin)
-                 * Base: /admin/concursos/{concurso}/inscritos
-                 * ==================================================== */
-                // Lista
-                Route::get('inscritos',                 [InscritosController::class, 'index'])->name('inscritos.index');
-                // Nova inscrição (form e store)
-                Route::get('inscritos/nova',            [InscritosController::class, 'create'])->name('inscritos.create');
-                Route::post('inscritos',                [InscritosController::class, 'store'])->name('inscritos.store');
-                // Importação
-                Route::get('inscritos/importar',        [InscritosController::class, 'importar'])->name('inscritos.importar');
-                Route::post('inscritos/importar',       [InscritosController::class, 'importarStore'])->name('inscritos.importar.store');
-                Route::get('inscritos/importar/modelo', [InscritosController::class, 'importarModelo'])->name('inscritos.importar.modelo');
-                // Dados extras
-                Route::get('inscritos/extras',          [InscritosController::class, 'extras'])->name('inscritos.extras');
-                Route::post('inscritos/extras',         [InscritosController::class, 'extrasStore'])->name('inscritos.extras.store');
-                Route::delete('inscritos/extras/{chave}', [InscritosController::class, 'extrasDestroy'])->name('inscritos.extras.destroy');
-
-                // 🔁 Alias: /inscricoes -> redireciona para /inscritos (apenas índice)
-                Route::get('inscricoes', function ($concurso) {
-                    return redirect()->route('admin.concursos.inscritos.index', $concurso);
-                })->name('inscricoes.index');
-
-                /* ==================================================== */
 
                 // Inscrições -> Isenções
                 Route::get('isencoes', [IsencoesController::class, 'index'])->name('isencoes.index');
@@ -253,30 +227,42 @@ Route::prefix('admin')
                 Route::get('anexos/{anexo}/editar', [ConcursoAnexoController::class, 'edit'])->name('anexos.edit');
                 Route::put('anexos/{anexo}', [ConcursoAnexoController::class, 'update'])->name('anexos.update');
                 Route::delete('anexos/{anexo}', [ConcursoAnexoController::class, 'destroy'])->name('anexos.destroy');
+                Route::patch('anexos/{anexo}/toggle-ativo', [ConcursoAnexoController::class, 'toggleAtivo'])->name('anexos.toggle-ativo');
+                Route::patch('anexos/{anexo}/toggle-restrito', [ConcursoAnexoController::class, 'toggleRestrito'])->name('anexos.toggle-restrito');
+                Route::patch('anexos/{anexo}/toggle', [ConcursoAnexoController::class, 'toggleAtivo'])->name('anexos.toggle');
 
-                // Anexos: toggles (clique único)
-                Route::patch('anexos/{anexo}/toggle-ativo', [ConcursoAnexoController::class, 'toggleAtivo'])
-                    ->name('anexos.toggle-ativo');
-
-                Route::patch('anexos/{anexo}/toggle-restrito', [ConcursoAnexoController::class, 'toggleRestrito'])
-                    ->name('anexos.toggle-restrito');
-
-                // (Opcional) alias para compatibilidade com a view antiga:
-                Route::patch('anexos/{anexo}/toggle', [ConcursoAnexoController::class, 'toggleAtivo'])
-                    ->name('anexos.toggle');
-
-                /* ============ Cidades de Prova (NOVO) ============ */
+                // Cidades de Prova
                 Route::get('cidades', [CidadeProvaController::class, 'index'])->name('cidades.index');
                 Route::get('cidades/criar', [CidadeProvaController::class, 'create'])->name('cidades.create');
                 Route::post('cidades', [CidadeProvaController::class, 'store'])->name('cidades.store');
                 Route::get('cidades/{cidade}/editar', [CidadeProvaController::class, 'edit'])->name('cidades.edit');
                 Route::put('cidades/{cidade}', [CidadeProvaController::class, 'update'])->name('cidades.update');
                 Route::delete('cidades/{cidade}', [CidadeProvaController::class, 'destroy'])->name('cidades.destroy');
-                /* ================================================ */
 
-                // Impugnações do Edital (seu controller já mapeado acima)
-                // (rotas já declaradas logo acima neste mesmo group)
-                // — nada alterado aqui
+                // =================================================
+                // INSCRITOS (lista, nova, importar, dados extras)
+                // =================================================
+                Route::get('inscritos', [InscritosController::class, 'index'])->name('inscritos.index');
+                Route::get('inscritos/nova', [InscritosController::class, 'create'])->name('inscritos.create');
+                Route::post('inscritos', [InscritosController::class, 'store'])->name('inscritos.store');
+
+                // checagem de CPF (botão "Inscrever" do modal)
+                Route::post('inscritos/check-cpf', [InscritosController::class, 'checkCpf'])->name('inscritos.checkCpf');
+
+                // importação (alinhado com sua view: .import e .import.handle)
+                Route::get('inscritos/importar', [InscritosImportController::class, 'show'])->name('inscritos.import');
+                Route::post('inscritos/importar', [InscritosImportController::class, 'handle'])->name('inscritos.import.handle');
+
+                // dados extras
+                Route::get('inscritos/dados-extras', [InscritosController::class, 'dadosExtras'])->name('inscritos.dados-extras');
+
+                // >>> SHOW (Resumo da inscrição) — depois das rotas específicas
+                Route::get('inscritos/{inscricao}', [InscritosController::class, 'show'])
+                    ->whereNumber('inscricao')
+                    ->name('inscritos.show');
+
+                // excluir inscrição
+                Route::delete('inscritos/{inscricao}', [InscritosController::class, 'destroy'])->name('inscritos.destroy');
             });
 
         // ==============================
@@ -381,7 +367,7 @@ Route::prefix('candidato')->name('candidato.')->group(function () {
         Route::get('/documentos/{documento}/arquivo', [CandidatoDocumentoController::class, 'open'])->name('documentos.open');
         Route::delete('/documentos/{documento}', [CandidatoDocumentoController::class, 'destroy'])->name('documentos.destroy');
 
-        // Inscrições (área do candidato)
+        // Inscrições
         Route::get('/inscricoes', [CandidatoInscricaoController::class, 'index'])->name('inscricoes.index');
         Route::get('/inscricoes/nova', [CandidatoInscricaoController::class, 'create'])->name('inscricoes.create');
         Route::get('/inscricoes/cargos/{concurso}', [CandidatoInscricaoController::class, 'cargos'])->name('inscricoes.cargos');
