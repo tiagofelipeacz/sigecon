@@ -32,6 +32,10 @@ class ConcursoAnexoController extends Controller
             : (Schema::hasColumn('concursos_anexos', 'ordem') ? 'ordem' : null);
 
         $rows = ConcursoAnexo::where('concurso_id', $concurso->id)
+            // Soft delete: se existir a coluna, não listar "apagados"
+            ->when(Schema::hasColumn('concursos_anexos', 'deleted_at'), fn ($w) =>
+                $w->whereNull('deleted_at')
+            )
             ->when($q !== '', function ($w) use ($q) {
                 $like = "%{$q}%";
                 $w->where(function ($x) use ($like) {
@@ -233,18 +237,26 @@ class ConcursoAnexoController extends Controller
     }
 
     /**
-     * Remove um anexo.
+     * Remove um anexo (soft delete se existir deleted_at; caso contrário, mantém o comportamento original).
      */
     public function destroy(Concurso $concurso, ConcursoAnexo $anexo)
     {
         $this->assertOwner($concurso, $anexo);
 
-        $oldPath = $anexo->arquivo_path ?? $anexo->arquivo ?? $anexo->path ?? null;
-        if ($oldPath) {
-            Storage::disk('public')->delete($oldPath);
-        }
+        $hasDeletedAt = Schema::hasColumn('concursos_anexos', 'deleted_at');
 
-        $anexo->delete();
+        if ($hasDeletedAt) {
+            // SOFT DELETE: mantém o arquivo e só marca como excluído
+            $anexo->deleted_at = now();
+            $anexo->save();
+        } else {
+            // Comportamento antigo: remove arquivo e apaga o registro
+            $oldPath = $anexo->arquivo_path ?? $anexo->arquivo ?? $anexo->path ?? null;
+            if ($oldPath) {
+                Storage::disk('public')->delete($oldPath);
+            }
+            $anexo->delete();
+        }
 
         return redirect()
             ->route('admin.concursos.anexos.index', $concurso)
@@ -383,44 +395,44 @@ class ConcursoAnexoController extends Controller
     /**
      * Sugestões de grupos de anexos (config/global ou existentes).
      */
-   private function carregarGruposAnexos(Concurso $concurso): array
-{
-    $nomes = [];
+    private function carregarGruposAnexos(Concurso $concurso): array
+    {
+        $nomes = [];
 
-    // 1) Tabelas de configuração (todas que existirem)
-    try {
-        foreach ([['anexo_grupos','nome'], ['grupos_anexos','nome'], ['config_grupos_anexos','nome']] as $t) {
-            [$tbl, $col] = $t;
-            if (Schema::hasTable($tbl) && Schema::hasColumn($tbl, $col)) {
-                $nomes = array_merge($nomes, DB::table($tbl)->orderBy($col)->pluck($col)->all());
+        // 1) Tabelas de configuração (todas que existirem)
+        try {
+            foreach ([['anexo_grupos','nome'], ['grupos_anexos','nome'], ['config_grupos_anexos','nome']] as $t) {
+                [$tbl, $col] = $t;
+                if (Schema::hasTable($tbl) && Schema::hasColumn($tbl, $col)) {
+                    $nomes = array_merge($nomes, DB::table($tbl)->orderBy($col)->pluck($col)->all());
+                }
             }
+        } catch (\Throwable $e) {
+            // ignora erro de leitura de configurações
         }
-    } catch (\Throwable $e) {
-        // ignora erro de leitura de configurações
+
+        // 2) Também incluir os grupos já usados pelos anexos deste concurso
+        if (Schema::hasColumn('concursos_anexos', 'grupo')) {
+            $usados = ConcursoAnexo::query()
+                ->where('concurso_id', $concurso->id)
+                ->whereNotNull('grupo')
+                ->whereRaw("TRIM(grupo) <> ''")
+                ->distinct()
+                ->orderBy('grupo')
+                ->pluck('grupo')
+                ->all();
+            $nomes = array_merge($nomes, $usados);
+        }
+
+        // Normaliza
+        $nomes = array_values(array_unique(array_map(
+            fn($v) => trim((string)$v),
+            array_filter($nomes, fn($v) => is_string($v) && trim($v) !== '')
+        )));
+        sort($nomes, SORT_NATURAL | SORT_FLAG_CASE);
+
+        return $nomes;
     }
-
-    // 2) Também incluir os grupos já usados pelos anexos deste concurso
-    if (Schema::hasColumn('concursos_anexos', 'grupo')) {
-        $usados = ConcursoAnexo::query()
-            ->where('concurso_id', $concurso->id)
-            ->whereNotNull('grupo')
-            ->whereRaw("TRIM(grupo) <> ''")
-            ->distinct()
-            ->orderBy('grupo')
-            ->pluck('grupo')
-            ->all();
-        $nomes = array_merge($nomes, $usados);
-    }
-
-    // Normaliza
-    $nomes = array_values(array_unique(array_map(
-        fn($v) => trim((string)$v),
-        array_filter($nomes, fn($v) => is_string($v) && trim($v) !== '')
-    )));
-    sort($nomes, SORT_NATURAL | SORT_FLAG_CASE);
-
-    return $nomes;
-}
 
     /**
      * Garante que o anexo pertence ao concurso.

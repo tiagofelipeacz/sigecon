@@ -8,10 +8,11 @@ use App\Models\Client;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Concurso extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     protected $table = 'concursos';
 
@@ -61,6 +62,9 @@ class Concurso extends Model
 
         'configs'            => 'array',
         'extras'             => 'array',
+
+        // Soft delete
+        'deleted_at'         => 'datetime',
     ];
 
     // Eager-load para evitar N+1 (mantendo sua intenção original)

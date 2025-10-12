@@ -47,7 +47,10 @@ class ConcursoController extends Controller
         $q = trim((string) $request->input('q', ''));
         $status = (string) $request->input('status', 'todos');
 
-        $query = Concurso::query()->with(['client','clientLegacy','clientAlt','clientPlural']);
+        // explicitamente sem itens soft-deletados (mesmo sendo default)
+        $query = Concurso::query()
+            ->withoutTrashed()
+            ->with(['client','clientLegacy','clientAlt','clientPlural']);
 
         if ($q !== '') {
             $query->where(function ($x) use ($q) {
@@ -438,6 +441,7 @@ class ConcursoController extends Controller
 
     public function destroy(Concurso $concurso)
     {
+        // agora faz soft delete (coluna deleted_at)
         $concurso->delete();
         return redirect()->route('admin.concursos.index')->with('success', 'Concurso excluído.');
     }
