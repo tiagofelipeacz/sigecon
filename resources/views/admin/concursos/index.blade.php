@@ -4,6 +4,8 @@
 @section('content')
 @php
     use Illuminate\Support\Str;
+    use Illuminate\Support\Arr;
+    use Illuminate\Support\Carbon;
 
     // Filtros (com fallback para request)
     $q            = $q            ?? request('q','');
@@ -15,6 +17,104 @@
     $url_create = \Route::has('admin.concursos.create')
         ? route('admin.concursos.create')
         : url('/admin/concursos/create');
+
+    /**
+     * Util: normaliza datas (banco pode ter inscricoes_* ou inscricao_*)
+     */
+    function _dtOrNull($val) {
+        if (empty($val)) return null;
+        try { return Carbon::parse($val); } catch (\Throwable $e) { return null; }
+    }
+
+    /**
+     * Fallback: calcula slug e label da "situação operacional" (igual ao Início)
+     * quando o Model não tiver os acessores ->situacao_operacional / ->situacao_operacional_label
+     */
+    function _calcSituacao($c): array {
+        // 1) Se o Model já tiver os acessores, usa-os
+        if (method_exists($c, 'getSituacaoOperacionalAttribute') || isset($c->situacao_operacional)) {
+            $slug  = (string)($c->situacao_operacional ?? '');
+            $label = (string)($c->situacao_operacional_label ?? '');
+            if ($slug !== '' || $label !== '') {
+                return [$slug ?: Str::slug($label, '_'), $label ?: ucfirst(str_replace('_',' ',$slug))];
+            }
+        }
+
+        // 2) Caso não tenha, deriva manualmente (segue mesma regra que propus no Model)
+        $ativo = (int)($c->ativo ?? 0) === 1;
+
+        // tenta usar coluna situacao (se existir)
+        $sit = trim((string)($c->situacao ?? ''));
+        $mapCol = [
+            'em_andamento' => ['em_andamento', 'Em andamento'],
+            'andamento'    => ['em_andamento', 'Em andamento'],
+            'publicado'    => ['em_andamento', 'Em andamento'],
+            'encerrado'    => ['inscricoes_encerradas', 'Inscrições encerradas'],
+            'aberto'       => ['inscricoes_abertas', 'Inscrições abertas'],
+        ];
+        if ($sit !== '' && isset($mapCol[$sit])) {
+            return $mapCol[$sit];
+        }
+
+        $agora = now();
+
+        // datas: aceitar tanto inscricoes_* quanto inscricao_*
+        $ini = _dtOrNull($c->inscricoes_inicio ?? $c->inscricao_inicio ?? null);
+        $fim = _dtOrNull($c->inscricoes_fim ?? $c->inscricao_fim ?? null);
+
+        // se não vier nas colunas, tenta no JSON configs
+        if ((!$ini || !$fim) && isset($c->configs)) {
+            $cfg = is_array($c->configs) ? $c->configs : (is_string($c->configs) ? json_decode($c->configs, true) : []);
+            $iS = Arr::get($cfg, 'inscricoes_inicio');
+            $fS = Arr::get($cfg, 'inscricoes_fim');
+            if (!$ini && $iS) $ini = _dtOrNull($iS);
+            if (!$fim && $fS) $fim = _dtOrNull($fS);
+        }
+
+        if ($ini && $fim) {
+            if ($agora->lt($ini)) {
+                return ['inscricoes_aguardando', 'Inscrições abrirão em breve'];
+            }
+            if ($agora->between($ini, $fim)) {
+                return ['inscricoes_abertas', 'Inscrições abertas'];
+            }
+            if ($agora->gt($fim)) {
+                return ['inscricoes_encerradas', 'Inscrições encerradas'];
+            }
+        }
+
+        // Se inativo
+        if (!$ativo) {
+            return ['inativo', 'Inativo'];
+        }
+
+        // Se tiver status bruto, tenta um mapeamento simples
+        $statusBruto = trim((string)($c->status ?? ''));
+        $mapStatus = [
+            'rascunho'  => ['rascunho', 'Rascunho'],
+            'publicado' => ['em_andamento', 'Em andamento'],
+        ];
+        if ($statusBruto !== '' && isset($mapStatus[$statusBruto])) {
+            return $mapStatus[$statusBruto];
+        }
+
+        // Fallback final
+        return ['em_andamento', 'Em andamento'];
+    }
+
+    /**
+     * Classe visual do badge
+     */
+    function _badgeClass(string $slug): string {
+        return match ($slug) {
+            'inscricoes_abertas'    => 'ok',
+            'inscricoes_aguardando' => 'info',
+            'inscricoes_encerradas' => 'nok',
+            'inativo'               => 'nok',
+            'rascunho'              => 'nok',
+            default                 => 'info', // em_andamento etc.
+        };
+    }
 @endphp
 
 <h1>Gerenciar Processos</h1>
@@ -47,8 +147,6 @@
       <option value="inicio_asc"     @selected($order==='inicio_asc')>Início inscrições (↑)</option>
       <option value="fim_desc"       @selected($order==='fim_desc')>Fim inscrições (↓)</option>
       <option value="fim_asc"        @selected($order==='fim_asc')>Fim inscrições (↑)</option>
-      <option value="titulo_asc"     @selected($order==='titulo_asc')>Título (A–Z)</option>
-      <option value="titulo_desc"    @selected($order==='titulo_desc')>Título (Z–A)</option>
     </select>
 
     <button class="btn" type="submit">Buscar</button>
@@ -79,6 +177,11 @@
     .tbl-min thead{ display:none; }
     .tbl-min tbody td{ border:none; border-top:1px solid #f1f5f9; }
   }
+
+  /* === Escopo local: apenas links dentro da tabela desta página === */
+  .tbl-min a:not(.btn) { color:#111; text-decoration:none; }
+  .tbl-min a:not(.btn):visited { color:#111; }
+  .tbl-min a:not(.btn):hover { color:#111; text-decoration:underline; }
 </style>
 
 <div class="tbl-min">
@@ -87,12 +190,11 @@
       <tr>
         <th style="width:70px">ID</th>
         <th style="width:160px">Tipo</th>
-        <th style="width:420px">Título</th> {{-- largura aumentada --}}
+        <th style="width:420px">Título</th>
         <th style="width:220px">Legenda (Interno)</th>
         <th style="width:110px">Edital</th>
         <th style="width:220px">Cliente</th>
         <th style="width:140px">Situação</th>
-        {{-- coluna "Início inscrições" removida --}}
         <th style="width:90px">Ativo</th>
         <th style="width:200px" class="nowrap">Ações</th>
       </tr>
@@ -105,26 +207,7 @@
             $edital = $c->numero_edital ?? $c->edital ?? '-';
             $tipo   = $c->tipo ?? $c->tipo_concurso ?? 'Concurso Público';
 
-            $ini   = $c->inscricao_inicio ? \Illuminate\Support\Carbon::parse($c->inscricao_inicio) : null;
-            $fim   = $c->inscricao_fim ? \Illuminate\Support\Carbon::parse($c->inscricao_fim) : null;
-            $agora = now();
-
-            // Status calculado sem ternários encadeados
-            $statusLabel = $c->status_exibicao ?? null;
-            if ($statusLabel === null) {
-                if ($ini && $fim && $agora->between($ini, $fim)) {
-                    $statusLabel = 'Inscrições Abertas';
-                } elseif ($ini && $agora->lt($ini)) {
-                    $statusLabel = 'Em Breve';
-                } elseif ($fim && $agora->gt($fim)) {
-                    $statusLabel = 'Encerradas';
-                } elseif (!empty($c->published_at)) {
-                    $statusLabel = 'Publicado';
-                } else {
-                    $statusLabel = 'Rascunho';
-                }
-            }
-
+            // Título
             $titulo = $c->titulo ?: ('Concurso #'.$c->id);
 
             // URLs essenciais
@@ -150,12 +233,22 @@
 
             $ativo = (int)($c->ativo ?? 0) === 1;
 
-            $cls = match ($statusLabel) {
-                'Inscrições Abertas'      => 'ok',
-                'Em Breve', 'Publicado'   => 'info',
-                'Encerradas', 'Rascunho'  => 'nok',
-                default                   => 'info',
-            };
+            // ===== SITUAÇÃO (unificada com /admin/inicio) =====
+            // Tenta usar acessores do Model; se não houver, usa fallback da própria view.
+            $slug = '';
+            $statusLabel = '';
+
+            if (isset($c->situacao_operacional) || isset($c->situacao_operacional_label)) {
+                $slug = (string)($c->situacao_operacional ?? '');
+                $statusLabel = (string)($c->situacao_operacional_label ?? '');
+            }
+
+            if ($slug === '' && $statusLabel === '') {
+                [$slug, $statusLabel] = _calcSituacao($c); // fallback local
+            }
+
+            // Classe do badge
+            $cls = _badgeClass($slug);
         @endphp
         <tr>
           <td>#{{ $c->id }}</td>
@@ -174,7 +267,6 @@
           <td>{{ $edital }}</td>
           <td>{{ $cli }}</td>
           <td><span class="pill {{ $cls }}">{{ $statusLabel }}</span></td>
-          {{-- célula "Início inscrições" removida --}}
           <td>{!! $ativo ? '<span class="pill ok">Sim</span>' : '<span class="pill nok">Não</span>' !!}</td>
           <td class="nowrap">
             <div class="toolbar" style="margin-top:16px; display:flex; gap:12px">

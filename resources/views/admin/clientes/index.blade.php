@@ -62,9 +62,9 @@
         <tr>
           <td>#{{ $c->id }}</td>
           <td>
-            <div style="font-weight:600">{{ $c->cliente ?? '—' }}</div>
+            <div style="font-weight:600">{{ $c->cliente ?? '-' }}</div>
           </td>
-          <td>{{ ($c->cidade ?? '—') . (isset($c->estado) ? '/'.$c->estado : '') }}</td>
+          <td>{{ ($c->cidade ?? '-') . (isset($c->estado) ? '/'.$c->estado : '') }}</td>
           <td class="nowrap">
             <div class="toolbar" style="display:flex; gap:12px">
               <a class="btn smol" href="{{ route('admin.clientes.edit', $c) }}">Editar</a>

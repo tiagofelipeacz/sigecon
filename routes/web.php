@@ -38,6 +38,7 @@ use App\Http\Controllers\Admin\Config\TipoIsencaoController;
 use App\Http\Controllers\Admin\Config\TipoCondicaoEspecialController;
 use App\Http\Controllers\Admin\Config\NiveisEscolaridadeController;
 use App\Http\Controllers\Admin\Config\TiposVagasEspeciaisController;
+use App\Http\Controllers\Admin\Config\AnexoGrupoController; // <<< ADICIONADO
 
 /**
  * Controllers (área do candidato)
@@ -300,6 +301,20 @@ Route::prefix('admin')
             Route::put('tipos-vagas-especiais/{id}', [TiposVagasEspeciaisController::class, 'update'])->name('tipos-vagas-especiais.update');
             Route::delete('tipos-vagas-especiais/{id}', [TiposVagasEspeciaisController::class, 'destroy'])->name('tipos-vagas-especiais.destroy');
             Route::patch('tipos-vagas-especiais/{id}/toggle-ativo', [TiposVagasEspeciaisController::class, 'toggleAtivo'])->name('tipos-vagas-especiais.toggle-ativo');
+
+            // =================================================
+            // Grupos de Anexos  <<< ADICIONADO
+            // =================================================
+            Route::resource('grupos-anexos', AnexoGrupoController::class)
+                ->parameters(['grupos-anexos' => 'grupo'])
+                ->names('grupos-anexos');
+
+            Route::patch('grupos-anexos/{grupo}/toggle', [AnexoGrupoController::class, 'toggle'])
+                ->name('grupos-anexos.toggle');
+
+            // >>> Reordenar (drag & drop)
+            Route::post('grupos-anexos/reordenar', [AnexoGrupoController::class, 'reorder'])
+                ->name('grupos-anexos.reorder');
         });
 
         // ==============================

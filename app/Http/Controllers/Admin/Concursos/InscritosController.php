@@ -416,28 +416,19 @@ class InscritosController extends Controller
             }
         }
 
-        // ===== Calcula o valor da inscrição (snapshot) ANTES de gravar
-        $valorSnapshot = null;
-        $colCargoValor = $this->firstExistingColumn('cargos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
-        if ($colCargoValor) {
-            $valorSnapshot = DB::table('cargos')->where('id', $cargoId)->value($colCargoValor);
-            $valorSnapshot = $valorSnapshot !== null ? (float)$valorSnapshot : null;
-        }
-        if ($valorSnapshot === null) {
-            $colConcValor = $this->firstExistingColumn('concursos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
-            if ($colConcValor) {
-                $valorSnapshot = DB::table('concursos')->where('id', $concurso->id)->value($colConcValor);
-                $valorSnapshot = $valorSnapshot !== null ? (float)$valorSnapshot : null;
-            }
-        }
-
         // ===== Transação
-        [$inscricaoId, $numeroFinal] = DB::transaction(function() use ($concurso, $fkInsc, $data, $numeroManual, $cargoId, $valorSnapshot) {
+        [$inscricaoId, $numeroFinal] = DB::transaction(function() use ($concurso, $fkInsc, $data, $numeroManual, $cargoId) {
             // bloqueia concurso p/ sequência
             $conc = Concurso::query()->lockForUpdate()->find($concurso->id);
 
+            // Calcula valor congelado (snapshot) e coluna destino na inscrição
+            $colInscValor   = $this->firstExistingColumn('inscricoes', ['valor_inscricao','taxa_inscricao','taxa','valor']);
+            $valorCongelado = $colInscValor
+                ? $this->resolveValorInscricao($concurso->id, $cargoId, $data['item_id'] ?? null)
+                : null;
+
             $payload = [
-                $fkInsc        => $concurso->id,
+                $fkInsc          => $concurso->id,
                 'user_id'        => null,
                 'candidato_id'   => $data['candidato_id'] ?? null,
                 'cpf'            => $data['cpf'],
@@ -452,19 +443,16 @@ class InscritosController extends Controller
                 'updated_at'     => now(),
             ];
 
+            // Anexa o valor congelado se houver coluna correspondente
+            if ($colInscValor) {
+                $payload[$colInscValor] = $valorCongelado;
+            }
+
             // Localidade na inscrição (se existir coluna)
             if (Schema::hasColumn('inscricoes', 'item_id') && !empty($data['item_id'])) {
                 $payload['item_id'] = (int) $data['item_id'];
             } elseif (Schema::hasColumn('inscricoes', 'localidade_id') && !empty($data['item_id'])) {
                 $payload['localidade_id'] = (int) $data['item_id'];
-            }
-
-            // Snapshot do valor, se houver coluna correspondente
-            if ($valorSnapshot !== null) {
-                $colInscValor = $this->firstExistingColumn('inscricoes', ['valor_inscricao','taxa_inscricao','taxa','valor']);
-                if ($colInscValor) {
-                    $payload[$colInscValor] = $valorSnapshot;
-                }
             }
 
             // Número
@@ -495,278 +483,277 @@ class InscritosController extends Controller
             ->with('ok', 'Inscrição #'.$numeroFinal.' criada com sucesso.');
     }
 
-   /** Show (resumo enriquecido) */
-public function show(Concurso $concurso, int $inscricaoId)
-{
-    [$fkInsc] = $this->fkInscricoes();
+    /** Show (resumo enriquecido) */
+    public function show(Concurso $concurso, int $inscricaoId)
+    {
+        [$fkInsc] = $this->fkInscricoes();
 
-    $insc = DB::table('inscricoes as i')
-        ->leftJoin('cargos as cg', 'cg.id', '=', 'i.cargo_id')
-        ->where('i.id', $inscricaoId)
-        ->where("i.$fkInsc", $concurso->id)
-        ->select('i.*', 'cg.nome as cargo_nome')
-        ->first();
+        $insc = DB::table('inscricoes as i')
+            ->leftJoin('cargos as cg', 'cg.id', '=', 'i.cargo_id')
+            ->where('i.id', $inscricaoId)
+            ->where("i.$fkInsc", $concurso->id)
+            ->select('i.*', 'cg.nome as cargo_nome')
+            ->first();
 
-    abort_if(!$insc, 404, 'Inscrição não encontrada.');
+        abort_if(!$insc, 404, 'Inscrição não encontrada.');
 
-    // =========================
-    // LOCALIDADE (robusto)
-    // =========================
-    $localidade = null;
-    $provaCidade = null;
-    $provaUF = null;
+        // =========================
+        // LOCALIDADE (robusto)
+        // =========================
+        $localidade = null;
+        $provaCidade = null;
+        $provaUF = null;
 
-    // 1) Quando a inscrição guarda o item_id
-    if (!empty($insc->item_id) && Schema::hasTable('concursos_vagas_itens')) {
-        $item = DB::table('concursos_vagas_itens')->where('id', $insc->item_id)->first();
-        if ($item) {
-            // a) coluna 'local' diretamente no item
-            if (Schema::hasColumn('concursos_vagas_itens', 'local') && !empty($item->local)) {
-                $localidade = $item->local;
-            }
-            // b) via FK para concursos_vagas_localidades
-            elseif (!empty($item->localidade_id) && Schema::hasTable('concursos_vagas_localidades')) {
-                $colLocal = $this->firstExistingColumn('concursos_vagas_localidades', [
-                    'nome','local_nome','descricao','titulo','cidade','municipio','nome_local','nome_cidade'
-                ]) ?? 'nome';
+        // 1) Quando a inscrição guarda o item_id
+        if (!empty($insc->item_id) && Schema::hasTable('concursos_vagas_itens')) {
+            $item = DB::table('concursos_vagas_itens')->where('id', $insc->item_id)->first();
+            if ($item) {
+                // a) coluna 'local' diretamente no item
+                if (Schema::hasColumn('concursos_vagas_itens', 'local') && !empty($item->local)) {
+                    $localidade = $item->local;
+                }
+                // b) via FK para concursos_vagas_localidades
+                elseif (!empty($item->localidade_id) && Schema::hasTable('concursos_vagas_localidades')) {
+                    $colLocal = $this->firstExistingColumn('concursos_vagas_localidades', [
+                        'nome','local_nome','descricao','titulo','cidade','municipio','nome_local','nome_cidade'
+                    ]) ?? 'nome';
 
-                $loc = DB::table('concursos_vagas_localidades')->where('id', $item->localidade_id)->first();
-                if ($loc) {
-                    $localidade = $loc->{$colLocal} ?? null;
-                    $cCol = $this->firstExistingColumn('concursos_vagas_localidades', ['cidade','municipio','nome_cidade']);
-                    $uCol = $this->firstExistingColumn('concursos_vagas_localidades', ['uf','estado']);
-                    $provaCidade = $cCol ? ($loc->{$cCol} ?? null) : null;
-                    $provaUF     = $uCol ? ($loc->{$uCol} ?? null) : null;
+                    $loc = DB::table('concursos_vagas_localidades')->where('id', $item->localidade_id)->first();
+                    if ($loc) {
+                        $localidade = $loc->{$colLocal} ?? null;
+                        $cCol = $this->firstExistingColumn('concursos_vagas_localidades', ['cidade','municipio','nome_cidade']);
+                        $uCol = $this->firstExistingColumn('concursos_vagas_localidades', ['uf','estado']);
+                        $provaCidade = $cCol ? ($loc->{$cCol} ?? null) : null;
+                        $provaUF     = $uCol ? ($loc->{$uCol} ?? null) : null;
+                    }
                 }
             }
         }
-    }
 
-    // 2) Quando a inscrição guarda localidade_id diretamente
-    if ($localidade === null && Schema::hasColumn('inscricoes', 'localidade_id') && !empty($insc->localidade_id) && Schema::hasTable('concursos_vagas_localidades')) {
-        $colLocal = $this->firstExistingColumn('concursos_vagas_localidades', [
-            'nome','local_nome','descricao','titulo','cidade','municipio','nome_local','nome_cidade'
-        ]) ?? 'nome';
+        // 2) Quando a inscrição guarda localidade_id diretamente
+        if ($localidade === null && Schema::hasColumn('inscricoes', 'localidade_id') && !empty($insc->localidade_id) && Schema::hasTable('concursos_vagas_localidades')) {
+            $colLocal = $this->firstExistingColumn('concursos_vagas_localidades', [
+                'nome','local_nome','descricao','titulo','cidade','municipio','nome_local','nome_cidade'
+            ]) ?? 'nome';
 
-        $loc = DB::table('concursos_vagas_localidades')->where('id', $insc->localidade_id)->first();
-        if ($loc) {
-            $localidade = $loc->{$colLocal} ?? null;
-            $cCol = $this->firstExistingColumn('concursos_vagas_localidades', ['cidade','municipio','nome_cidade']);
-            $uCol = $this->firstExistingColumn('concursos_vagas_localidades', ['uf','estado']);
-            $provaCidade = $cCol ? ($loc->{$cCol} ?? null) : null;
-            $provaUF     = $uCol ? ($loc->{$uCol} ?? null) : null;
+            $loc = DB::table('concursos_vagas_localidades')->where('id', $insc->localidade_id)->first();
+            if ($loc) {
+                $localidade = $loc->{$colLocal} ?? null;
+                $cCol = $this->firstExistingColumn('concursos_vagas_localidades', ['cidade','municipio','nome_cidade']);
+                $uCol = $this->firstExistingColumn('concursos_vagas_localidades', ['uf','estado']);
+                $provaCidade = $cCol ? ($loc->{$cCol} ?? null) : null;
+                $provaUF     = $uCol ? ($loc->{$uCol} ?? null) : null;
+            }
         }
-    }
 
-    // =========================
-    // VALOR DA INSCRIÇÃO (ordem de fallback)
-    // =========================
-    $valorInscricao = null;
+        // =========================
+        // VALOR DA INSCRIÇÃO (ordem de fallback)
+        // =========================
+        $valorInscricao = null;
 
-    // 1) Campo direto na inscrição
-    $colInscValor = $this->firstExistingColumn('inscricoes', ['valor_inscricao','taxa_inscricao','taxa','valor']);
-    if ($colInscValor && isset($insc->{$colInscValor}) && $insc->{$colInscValor} !== null) {
-        $valorInscricao = (float) $insc->{$colInscValor};
-    }
-
-    // 2) Valor configurado no cargo da TELA DE VAGAS (concursos_vagas_cargos), via item_id
-    if ($valorInscricao === null
-        && !empty($insc->item_id)
-        && Schema::hasTable('concursos_vagas_itens')
-        && Schema::hasTable('concursos_vagas_cargos')) {
-
-        $colCvcValor = $this->firstExistingColumn('concursos_vagas_cargos', ['valor_inscricao','taxa']);
-        if ($colCvcValor) {
-            $v = DB::table('concursos_vagas_itens as i')
-                ->join('concursos_vagas_cargos as cvc', 'cvc.id', '=', 'i.cargo_id')
-                ->where('i.id', $insc->item_id)
-                ->value(DB::raw("cvc.`{$colCvcValor}`"));
-            if ($v !== null) $valorInscricao = (float) $v;
+        // 1) Campo direto na inscrição
+        $colInscValor = $this->firstExistingColumn('inscricoes', ['valor_inscricao','taxa_inscricao','taxa','valor']);
+        if ($colInscValor && isset($insc->{$colInscValor}) && $insc->{$colInscValor} !== null) {
+            $valorInscricao = (float) $insc->{$colInscValor};
         }
-    }
 
-    // 3) Valor no cargo das VAGAS (concursos_vagas_cargos) casando pelo nome do cargo
-    if ($valorInscricao === null
-        && !empty($insc->cargo_id)
-        && Schema::hasTable('concursos_vagas_cargos')) {
+        // 2) Valor configurado no cargo da TELA DE VAGAS (concursos_vagas_cargos), via item_id
+        if ($valorInscricao === null
+            && !empty($insc->item_id)
+            && Schema::hasTable('concursos_vagas_itens')
+            && Schema::hasTable('concursos_vagas_cargos')) {
 
-        $colCvcValor = $this->firstExistingColumn('concursos_vagas_cargos', ['valor_inscricao','taxa']);
-        if ($colCvcValor) {
-            $nomeCargo = DB::table('cargos')->where('id', $insc->cargo_id)->value('nome');
-            if ($nomeCargo) {
-                $v = DB::table('concursos_vagas_cargos')
-                    ->where('concurso_id', $concurso->id)
-                    ->where('nome', $nomeCargo)
-                    ->value($colCvcValor);
+            $colCvcValor = $this->firstExistingColumn('concursos_vagas_cargos', ['valor_inscricao','taxa']);
+            if ($colCvcValor) {
+                $v = DB::table('concursos_vagas_itens as i')
+                    ->join('concursos_vagas_cargos as cvc', 'cvc.id', '=', 'i.cargo_id')
+                    ->where('i.id', $insc->item_id)
+                    ->value(DB::raw("cvc.`{$colCvcValor}`"));
                 if ($v !== null) $valorInscricao = (float) $v;
             }
         }
-    }
 
-    // 4) Valor no cargo da tabela "cargos" (se houver coluna correspondente)
-    if ($valorInscricao === null && !empty($insc->cargo_id)) {
-        $colCargoValor = $this->firstExistingColumn('cargos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
-        if ($colCargoValor) {
-            $v = DB::table('cargos')->where('id', $insc->cargo_id)->value($colCargoValor);
-            if ($v !== null) $valorInscricao = (float) $v;
-        }
-    }
+        // 3) Valor no cargo das VAGAS (concursos_vagas_cargos) casando pelo nome do cargo
+        if ($valorInscricao === null
+            && !empty($insc->cargo_id)
+            && Schema::hasTable('concursos_vagas_cargos')) {
 
-    // 5) Valor padrão no concurso
-    if ($valorInscricao === null) {
-        $colConcValor = $this->firstExistingColumn('concursos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
-        if ($colConcValor) {
-            $v = DB::table('concursos')->where('id', $concurso->id)->value($colConcValor);
-            if ($v !== null) $valorInscricao = (float) $v;
-        }
-    }
-
-    // -------- Condições especiais --------
-    $condicoesSelecionadas = $this->fetchCondicoesEspeciais($inscricaoId);
-
-    // -------- Contatos (prioriza inscrição; fallback candidato) --------
-    $contatos = [
-        'email'    => null,
-        'telefone' => null,
-        'celular'  => null,
-    ];
-    $emailCol = $this->firstExistingColumn('inscricoes', ['email']);
-    $telCol   = $this->firstExistingColumn('inscricoes', ['telefone','tel','phone']);
-    $celCol   = $this->firstExistingColumn('inscricoes', ['celular','cel','mobile','whatsapp']);
-
-    if ($emailCol && isset($insc->{$emailCol})) $contatos['email'] = $insc->{$emailCol};
-    if ($telCol   && isset($insc->{$telCol}))   $contatos['telefone'] = $insc->{$telCol};
-    if ($celCol   && isset($insc->{$celCol}))   $contatos['celular']  = $insc->{$celCol};
-
-    if (empty($contatos['email']) || empty($contatos['telefone']) || empty($contatos['celular'])) {
-        if (!empty($insc->candidato_id) && Schema::hasTable('candidatos')) {
-            $cand = DB::table('candidatos')->where('id', $insc->candidato_id)->first();
-            if ($cand) {
-                if (empty($contatos['email']) && isset($cand->email))       $contatos['email']    = $cand->email;
-                if (empty($contatos['telefone']) && isset($cand->telefone)) $contatos['telefone'] = $cand->telefone ?? ($cand->phone ?? null);
-                if (empty($contatos['celular']) && isset($cand->celular))   $contatos['celular']  = $cand->celular ?? null;
+            $colCvcValor = $this->firstExistingColumn('concursos_vagas_cargos', ['valor_inscricao','taxa']);
+            if ($colCvcValor) {
+                $nomeCargo = DB::table('cargos')->where('id', $insc->cargo_id)->value('nome');
+                if ($nomeCargo) {
+                    $v = DB::table('concursos_vagas_cargos')
+                        ->where('concurso_id', $concurso->id)
+                        ->where('nome', $nomeCargo)
+                        ->value($colCvcValor);
+                    if ($v !== null) $valorInscricao = (float) $v;
+                }
             }
         }
-    }
 
-    // -------- Detalhes da vaga --------
-    $vaga = [
-        'escolaridade'  => null,
-        'carga_horaria' => null,
-        'remuneracao'   => null,
-    ];
-    if ($insc->cargo_id) {
-        $escCol = $this->firstExistingColumn('cargos', ['escolaridade','nivel_escolaridade','nivel','escolaridade_exigida']);
-        $chCol  = $this->firstExistingColumn('cargos', ['carga_horaria','carga','horas_semanais']);
-        $salCol = $this->firstExistingColumn('cargos', ['salario','faixa_salarial','remuneracao','vencimentos']);
-
-        $row = DB::table('cargos')->where('id', $insc->cargo_id)->first();
-        if ($row) {
-            $vaga['escolaridade']  = $escCol && isset($row->{$escCol}) ? $row->{$escCol} : null;
-            $vaga['carga_horaria'] = $chCol  && isset($row->{$chCol})  ? $row->{$chCol}  : null;
-            $vaga['remuneracao']   = $salCol && isset($row->{$salCol}) ? $row->{$salCol} : null;
-        }
-    }
-
-    // -------- Pagamento (mesma lógica que você já tinha) --------
-    $pagamento = null;
-    $tryTables = ['boletos','financeiro_boletos','pagamentos','inscricoes_pagamentos'];
-    foreach ($tryTables as $tb) {
-        if (!Schema::hasTable($tb)) continue;
-
-        $fkCol = $this->firstExistingColumn($tb, ['inscricao_id','id_inscricao','insc_id','reference_id']);
-        if (!$fkCol) continue;
-
-        $q = DB::table($tb)->where($fkCol, $inscricaoId);
-        $typeCol = $this->firstExistingColumn($tb, ['reference_type','model','tipo_ref','model_type']);
-        if ($typeCol) {
-            $q->where(function($w) use ($typeCol) {
-                $w->where($typeCol, 'inscricao')->orWhere($typeCol, 'Inscricao')->orWhere($typeCol, 'App\\Models\\Inscricao');
-            });
+        // 4) Valor no cargo da tabela "cargos" (se houver coluna correspondente)
+        if ($valorInscricao === null && !empty($insc->cargo_id)) {
+            $colCargoValor = $this->firstExistingColumn('cargos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
+            if ($colCargoValor) {
+                $v = DB::table('cargos')->where('id', $insc->cargo_id)->value($colCargoValor);
+                if ($v !== null) $valorInscricao = (float) $v;
+            }
         }
 
-        $rec = $q->orderByDesc('id')->first();
-        if ($rec) {
-            $statusCol = $this->firstExistingColumn($tb, ['status','situacao']);
-            $vencCol   = $this->firstExistingColumn($tb, ['vencimento','due_at','data_vencimento']);
-            $valorCol  = $this->firstExistingColumn($tb, ['valor','valor_boleto','valor_total','amount']);
-            $formaCol  = $this->firstExistingColumn($tb, ['forma','meio','metodo','gateway']);
-            $linhaCol  = $this->firstExistingColumn($tb, ['linha_digitavel','linha','digitable_line']);
-            $urlCol    = $this->firstExistingColumn($tb, ['url','link','pdf','boleto_url']);
-            $qrCol     = $this->firstExistingColumn($tb, ['qr','qr_code','qrcode']);
-            $txidCol   = $this->firstExistingColumn($tb, ['txid','transaction_id','payment_id','nosso_numero']);
-
-            $pagamento = [
-                'status'          => $statusCol ? ($rec->{$statusCol} ?? null) : null,
-                'vencimento'      => $vencCol   ? ($rec->{$vencCol}   ?? null) : null,
-                'valor'           => $valorCol  ? ($rec->{$valorCol}  ?? null) : null,
-                'forma'           => $formaCol  ? ($rec->{$formaCol}  ?? null) : null,
-                'linha_digitavel' => $linhaCol  ? ($rec->{$linhaCol}  ?? null) : null,
-                'url'             => $urlCol    ? ($rec->{$urlCol}    ?? null) : null,
-                'qr'              => $qrCol     ? ($rec->{$qrCol}     ?? null) : null,
-                'txid'            => $txidCol   ? ($rec->{$txidCol}   ?? null) : null,
-            ];
-            break;
+        // 5) Valor padrão no concurso
+        if ($valorInscricao === null) {
+            $colConcValor = $this->firstExistingColumn('concursos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
+            if ($colConcValor) {
+                $v = DB::table('concursos')->where('id', $concurso->id)->value($colConcValor);
+                if ($v !== null) $valorInscricao = (float) $v;
+            }
         }
-    }
 
-    // -------- Observações internas --------
-    $obs = null;
-    $obsCol = $this->firstExistingColumn('inscricoes', ['observacoes','obs','anotacoes','nota','observacao']);
-    if ($obsCol && isset($insc->{$obsCol})) $obs = $insc->{$obsCol};
+        // -------- Condições especiais --------
+        $condicoesSelecionadas = $this->fetchCondicoesEspeciais($inscricaoId);
 
-    // -------- Histórico de status (inalterado) --------
-    $historico = [];
-    $histTables = ['inscricoes_status_logs','inscricoes_logs','inscricoes_historico','inscricao_logs'];
-    foreach ($histTables as $tb) {
-        if (!Schema::hasTable($tb)) continue;
-        $fkCol = $this->firstExistingColumn($tb, ['inscricao_id','id_inscricao','insc_id']);
-        if (!$fkCol) continue;
-        $rows = DB::table($tb)->where($fkCol, $inscricaoId)->orderByDesc('created_at')->limit(10)->get();
-        if ($rows->count()) {
-            $statusCol = $this->firstExistingColumn($tb, ['status','novo_status','to_status']);
-            $userCol   = $this->firstExistingColumn($tb, ['user_id','created_by','id_usuario']);
-            $descCol   = $this->firstExistingColumn($tb, ['descricao','description','obs','observacao','motivo']);
-            foreach ($rows as $r) {
-                $historico[] = [
-                    'quando'  => $r->created_at ?? null,
-                    'status'  => $statusCol ? ($r->{$statusCol} ?? null) : null,
-                    'user_id' => $userCol ? ($r->{$userCol} ?? null) : null,
-                    'texto'   => $descCol ? ($r->{$descCol} ?? null) : null,
+        // -------- Contatos (prioriza inscrição; fallback candidato) --------
+        $contatos = [
+            'email'    => null,
+            'telefone' => null,
+            'celular'  => null,
+        ];
+        $emailCol = $this->firstExistingColumn('inscricoes', ['email']);
+        $telCol   = $this->firstExistingColumn('inscricoes', ['telefone','tel','phone']);
+        $celCol   = $this->firstExistingColumn('inscricoes', ['celular','cel','mobile','whatsapp']);
+
+        if ($emailCol && isset($insc->{$emailCol})) $contatos['email'] = $insc->{$emailCol};
+        if ($telCol   && isset($insc->{$telCol}))   $contatos['telefone'] = $insc->{$telCol};
+        if ($celCol   && isset($insc->{$celCol}))   $contatos['celular']  = $insc->{$celCol};
+
+        if (empty($contatos['email']) || empty($contatos['telefone']) || empty($contatos['celular'])) {
+            if (!empty($insc->candidato_id) && Schema::hasTable('candidatos')) {
+                $cand = DB::table('candidatos')->where('id', $insc->candidato_id)->first();
+                if ($cand) {
+                    if (empty($contatos['email']) && isset($cand->email))       $contatos['email']    = $cand->email;
+                    if (empty($contatos['telefone']) && isset($cand->telefone)) $contatos['telefone'] = $cand->telefone ?? ($cand->phone ?? null);
+                    if (empty($contatos['celular']) && isset($cand->celular))   $contatos['celular']  = $cand->celular ?? null;
+                }
+            }
+        }
+
+        // -------- Detalhes da vaga --------
+        $vaga = [
+            'escolaridade'  => null,
+            'carga_horaria' => null,
+            'remuneracao'   => null,
+        ];
+        if ($insc->cargo_id) {
+            $escCol = $this->firstExistingColumn('cargos', ['escolaridade','nivel_escolaridade','nivel','escolaridade_exigida']);
+            $chCol  = $this->firstExistingColumn('cargos', ['carga_horaria','carga','horas_semanais']);
+            $salCol = $this->firstExistingColumn('cargos', ['salario','faixa_salarial','remuneracao','vencimentos']);
+
+            $row = DB::table('cargos')->where('id', $insc->cargo_id)->first();
+            if ($row) {
+                $vaga['escolaridade']  = $escCol && isset($row->{$escCol}) ? $row->{$escCol} : null;
+                $vaga['carga_horaria'] = $chCol  && isset($row->{$chCol})  ? $row->{$chCol}  : null;
+                $vaga['remuneracao']   = $salCol && isset($row->{$salCol}) ? $row->{$salCol} : null;
+            }
+        }
+
+        // -------- Pagamento (mesma lógica que você já tinha) --------
+        $pagamento = null;
+        $tryTables = ['boletos','financeiro_boletos','pagamentos','inscricoes_pagamentos'];
+        foreach ($tryTables as $tb) {
+            if (!Schema::hasTable($tb)) continue;
+
+            $fkCol = $this->firstExistingColumn($tb, ['inscricao_id','id_inscricao','insc_id','reference_id']);
+            if (!$fkCol) continue;
+
+            $q = DB::table($tb)->where($fkCol, $inscricaoId);
+            $typeCol = $this->firstExistingColumn($tb, ['reference_type','model','tipo_ref','model_type']);
+            if ($typeCol) {
+                $q->where(function($w) use ($typeCol) {
+                    $w->where($typeCol, 'inscricao')->orWhere($typeCol, 'Inscricao')->orWhere($typeCol, 'App\\Models\\Inscricao');
+                });
+            }
+
+            $rec = $q->orderByDesc('id')->first();
+            if ($rec) {
+                $statusCol = $this->firstExistingColumn($tb, ['status','situacao']);
+                $vencCol   = $this->firstExistingColumn($tb, ['vencimento','due_at','data_vencimento']);
+                $valorCol  = $this->firstExistingColumn($tb, ['valor','valor_boleto','valor_total','amount']);
+                $formaCol  = $this->firstExistingColumn($tb, ['forma','meio','metodo','gateway']);
+                $linhaCol  = $this->firstExistingColumn($tb, ['linha_digitavel','linha','digitable_line']);
+                $urlCol    = $this->firstExistingColumn($tb, ['url','link','pdf','boleto_url']);
+                $qrCol     = $this->firstExistingColumn($tb, ['qr','qr_code','qrcode']);
+                $txidCol   = $this->firstExistingColumn($tb, ['txid','transaction_id','payment_id','nosso_numero']);
+
+                $pagamento = [
+                    'status'          => $statusCol ? ($rec->{$statusCol} ?? null) : null,
+                    'vencimento'      => $vencCol   ? ($rec->{$vencCol}   ?? null) : null,
+                    'valor'           => $valorCol  ? ($rec->{$valorCol}  ?? null) : null,
+                    'forma'           => $formaCol  ? ($rec->{$formaCol}  ?? null) : null,
+                    'linha_digitavel' => $linhaCol  ? ($rec->{$linhaCol}  ?? null) : null,
+                    'url'             => $urlCol    ? ($rec->{$urlCol}    ?? null) : null,
+                    'qr'              => $qrCol     ? ($rec->{$qrCol}     ?? null) : null,
+                    'txid'            => $txidCol   ? ($rec->{$txidCol}   ?? null) : null,
                 ];
+                break;
             }
-            break;
         }
-    }
 
-    if (!empty($historico)) {
-        $ids = collect($historico)->pluck('user_id')->filter()->unique()->values();
-        if ($ids->count() && Schema::hasTable('users')) {
-            $map = DB::table('users')->whereIn('id', $ids)->pluck('name','id')->toArray();
-            foreach ($historico as &$h) {
-                $h['user_nome'] = $h['user_id'] && isset($map[$h['user_id']]) ? $map[$h['user_id']] : null;
+        // -------- Observações internas --------
+        $obs = null;
+        $obsCol = $this->firstExistingColumn('inscricoes', ['observacoes','obs','anotacoes','nota','observacao']);
+        if ($obsCol && isset($insc->{$obsCol})) $obs = $insc->{$obsCol};
+
+        // -------- Histórico de status (inalterado) --------
+        $historico = [];
+        $histTables = ['inscricoes_status_logs','inscricoes_logs','inscricoes_historico','inscricao_logs'];
+        foreach ($histTables as $tb) {
+            if (!Schema::hasTable($tb)) continue;
+            $fkCol = $this->firstExistingColumn($tb, ['inscricao_id','id_inscricao','insc_id']);
+            if (!$fkCol) continue;
+            $rows = DB::table($tb)->where($fkCol, $inscricaoId)->orderByDesc('created_at')->limit(10)->get();
+            if ($rows->count()) {
+                $statusCol = $this->firstExistingColumn($tb, ['status','novo_status','to_status']);
+                $userCol   = $this->firstExistingColumn($tb, ['user_id','created_by','id_usuario']);
+                $descCol   = $this->firstExistingColumn($tb, ['descricao','description','obs','observacao','motivo']);
+                foreach ($rows as $r) {
+                    $historico[] = [
+                        'quando'  => $r->created_at ?? null,
+                        'status'  => $statusCol ? ($r->{$statusCol} ?? null) : null,
+                        'user_id' => $userCol ? ($r->{$userCol} ?? null) : null,
+                        'texto'   => $descCol ? ($r->{$descCol} ?? null) : null,
+                    ];
+                }
+                break;
             }
-            unset($h);
         }
+
+        if (!empty($historico)) {
+            $ids = collect($historico)->pluck('user_id')->filter()->unique()->values();
+            if ($ids->count() && Schema::hasTable('users')) {
+                $map = DB::table('users')->whereIn('id', $ids)->pluck('name','id')->toArray();
+                foreach ($historico as &$h) {
+                    $h['user_nome'] = $h['user_id'] && isset($map[$h['user_id']]) ? $map[$h['user_id']] : null;
+                }
+                unset($h);
+            }
+        }
+
+        return view('admin.concursos.inscritos.show', [
+            'concurso'        => $concurso,
+            'inscricao'       => $insc,
+            'localidade'      => $localidade,
+            'condicoes'       => $condicoesSelecionadas,
+            'STATUS_LBL'      => self::STATUS_LBL,
+            'valorInscricao'  => $valorInscricao,
+            'contatos'        => $contatos,
+            'vaga'            => $vaga,
+            'provaCidade'     => $provaCidade,
+            'provaUF'         => $provaUF,
+            'pagamento'       => $pagamento,
+            'observacoes'     => $obs,
+            'historico'       => $historico,
+        ]);
     }
-
-    return view('admin.concursos.inscritos.show', [
-        'concurso'        => $concurso,
-        'inscricao'       => $insc,
-        'localidade'      => $localidade,
-        'condicoes'       => $condicoesSelecionadas,
-        'STATUS_LBL'      => self::STATUS_LBL,
-        'valorInscricao'  => $valorInscricao,
-        'contatos'        => $contatos,
-        'vaga'            => $vaga,
-        'provaCidade'     => $provaCidade,
-        'provaUF'         => $provaUF,
-        'pagamento'       => $pagamento,
-        'observacoes'     => $obs,
-        'historico'       => $historico,
-    ]);
-}
-
 
     public function importForm(Concurso $concurso)
     {
@@ -851,6 +838,53 @@ public function show(Concurso $concurso, int $inscricaoId)
     private function firstExistingColumn(string $table, array $candidates): ?string
     {
         foreach ($candidates as $col) if (Schema::hasColumn($table, $col)) return $col;
+        return null;
+    }
+
+    /** Resolve o valor da inscrição de forma robusta (item → vagas_cargos → cargos → concurso) */
+    private function resolveValorInscricao(int $concursoId, ?int $cargoId, ?int $itemId): ?float
+    {
+        // 1) Pelo item → concursos_vagas_cargos
+        if ($itemId && Schema::hasTable('concursos_vagas_itens') && Schema::hasTable('concursos_vagas_cargos')) {
+            $col = $this->firstExistingColumn('concursos_vagas_cargos', ['valor_inscricao','taxa']);
+            if ($col) {
+                $v = DB::table('concursos_vagas_itens as i')
+                    ->join('concursos_vagas_cargos as cvc','cvc.id','=','i.cargo_id')
+                    ->where('i.id', $itemId)
+                    ->value(DB::raw("cvc.`{$col}`"));
+                if ($v !== null) return (float)$v;
+            }
+        }
+
+        // 2) Pelo nome do cargo em concursos_vagas_cargos
+        if ($cargoId && Schema::hasTable('concursos_vagas_cargos')) {
+            $col  = $this->firstExistingColumn('concursos_vagas_cargos', ['valor_inscricao','taxa']);
+            $nome = DB::table('cargos')->where('id', $cargoId)->value('nome');
+            if ($col && $nome) {
+                $v = DB::table('concursos_vagas_cargos')
+                    ->where('concurso_id', $concursoId)
+                    ->where('nome', $nome)
+                    ->value($col);
+                if ($v !== null) return (float)$v;
+            }
+        }
+
+        // 3) Cargo (tabela cargos)
+        if ($cargoId) {
+            $col = $this->firstExistingColumn('cargos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
+            if ($col) {
+                $v = DB::table('cargos')->where('id', $cargoId)->value($col);
+                if ($v !== null) return (float)$v;
+            }
+        }
+
+        // 4) Concurso (padrão)
+        $col = $this->firstExistingColumn('concursos', ['valor_inscricao','taxa_inscricao','taxa','valor']);
+        if ($col) {
+            $v = DB::table('concursos')->where('id', $concursoId)->value($col);
+            if ($v !== null) return (float)$v;
+        }
+
         return null;
     }
 
