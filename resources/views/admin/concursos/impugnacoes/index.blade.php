@@ -26,6 +26,12 @@
   .filters{ display:grid; grid-template-columns: 1fr 220px 120px; gap:10px; margin-bottom:12px; }
   @media (max-width: 768px){ .filters{ grid-template-columns: 1fr; } }
   .chip{ background:#eef2ff; color:#3730a3; padding:3px 8px; border-radius:999px; font-size:12px; }
+
+  /* Link do nome: mantém a cor, inclusive após visitado */
+  a.link-clean { color: inherit; text-decoration: underline; text-underline-offset: 2px; font-weight:600; }
+  a.link-clean:visited { color: inherit; }
+  a.link-clean:hover { color: inherit; text-decoration: underline; opacity: .9; }
+  a.link-clean:active { color: inherit; }
 </style>
 
 @if(session('success'))
@@ -85,8 +91,7 @@
               <tr>
                 <td>{{ $i->id }}</td>
                 <td>
-                  <a href="{{ route('admin.concursos.impugnacoes.edit', [$concurso, $i->id]) }}"
-                     style="font-weight:600; text-decoration:underline; text-underline-offset:2px">
+                  <a class="link-clean" href="{{ route('admin.concursos.impugnacoes.edit', [$concurso, $i->id]) }}">
                     {{ $i->nome ?? '—' }}
                   </a>
                   <div class="muted" style="font-size:12px">

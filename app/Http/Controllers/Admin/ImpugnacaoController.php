@@ -85,4 +85,52 @@ class ImpugnacaoController extends Controller
             ->route('admin.concursos.impugnacoes.index', $concurso)
             ->with('success', 'Impugnação atualizada com sucesso.');
     }
+
+    /**
+     * DELETE /admin/concursos/{concurso}/impugnacoes/{impugnacao}
+     * Soft delete (arquiva). NADA do que existia foi removido, apenas adicionamos este método.
+     */
+    public function destroy(Concurso $concurso, ImpugnacaoEdital $impugnacao)
+    {
+        abort_if($impugnacao->concurso_id !== $concurso->id, 404);
+
+        $impugnacao->delete(); // SoftDeletes no model garante o arquivamento
+        return redirect()
+            ->route('admin.concursos.impugnacoes.index', $concurso)
+            ->with('success', 'Impugnação arquivada com sucesso.');
+    }
+
+    /**
+     * POST /admin/concursos/{concurso}/impugnacoes/{id}/restore
+     * Restaura um registro arquivado.
+     */
+    public function restore(Concurso $concurso, int $id)
+    {
+        $impugnacao = ImpugnacaoEdital::onlyTrashed()
+            ->where('concurso_id', $concurso->id)
+            ->findOrFail($id);
+
+        $impugnacao->restore();
+
+        return redirect()
+            ->route('admin.concursos.impugnacoes.index', $concurso)
+            ->with('success', 'Impugnação restaurada com sucesso.');
+    }
+
+    /**
+     * DELETE /admin/concursos/{concurso}/impugnacoes/{id}/force
+     * Exclusão definitiva (sem possibilidade de restauração).
+     */
+    public function forceDestroy(Concurso $concurso, int $id)
+    {
+        $impugnacao = ImpugnacaoEdital::onlyTrashed()
+            ->where('concurso_id', $concurso->id)
+            ->findOrFail($id);
+
+        $impugnacao->forceDelete();
+
+        return redirect()
+            ->route('admin.concursos.impugnacoes.index', $concurso)
+            ->with('success', 'Impugnação excluída definitivamente.');
+    }
 }

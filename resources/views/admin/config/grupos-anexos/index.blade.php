@@ -115,7 +115,7 @@
             <td>
               {{ $r->nome }}
               @if($usos > 0)
-                <span class="muted">— em uso</span>
+                <span class="muted">- em uso</span>
               @endif
             </td>
             <td>{{ (int)($r->ordem ?? 0) }}</td>

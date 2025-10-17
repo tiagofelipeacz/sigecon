@@ -264,6 +264,79 @@ class ConcursoAnexoController extends Controller
     }
 
     /**
+     * ABRE o anexo (stream inline) independente de symlink.
+     * - Se for do tipo LINK, redireciona para a URL.
+     * - Se for arquivo, tenta servir via disk('public') e fallbacks locais.
+     */
+    public function open(Concurso $concurso, int $anexoId)
+    {
+        $anexo = ConcursoAnexo::query()
+            ->where('id', $anexoId)
+            ->where('concurso_id', $concurso->id)
+            ->when(Schema::hasColumn('concursos_anexos', 'deleted_at'), fn($q) => $q->whereNull('deleted_at'))
+            ->firstOrFail();
+
+        // Tipo link? redireciona
+        $tipo = (string)($anexo->tipo ?? '');
+        if ($tipo === 'link') {
+            $link = $anexo->link_url ?? $anexo->url ?? $anexo->link ?? null;
+            if ($link) {
+                return redirect()->away($link);
+            }
+            abort(404);
+        }
+
+        // Descobrir caminho salvo no banco
+        $rawPath = $anexo->arquivo_path ?? $anexo->arquivo ?? $anexo->path ?? null;
+        if (!$rawPath) {
+            abort(404);
+        }
+
+        // Normaliza
+        $p = str_replace('\\', '/', (string)$rawPath);
+        $p = ltrim($p, '/');
+
+        // se veio "storage/..." ou "public/..." ou "app/public/...", recorta para ficar relativo ao disk('public')
+        if (stripos($p, 'storage/') === 0)     { $p = substr($p, strlen('storage/')); }
+        if (stripos($p, 'public/') === 0)      { $p = substr($p, strlen('public/')); }
+        if (stripos($p, 'app/public/') === 0)  { $p = substr($p, strlen('app/public/')); }
+
+        // 1) disk('public')
+        $disk = Storage::disk('public');
+        if ($disk->exists($p)) {
+            $absolute = $disk->path($p);
+            $name     = basename($absolute);
+            // inline (abre no navegador)
+            return response()->file($absolute, [
+                'Cache-Control'      => 'private, max-age=0',
+                'Content-Disposition'=> 'inline; filename="'.$name.'"',
+            ]);
+        }
+
+        // 2) Caminho público absoluto informado no banco?
+        $publicAbs = public_path($rawPath);
+        if (file_exists($publicAbs)) {
+            $name = basename($publicAbs);
+            return response()->file($publicAbs, [
+                'Cache-Control'      => 'private, max-age=0',
+                'Content-Disposition'=> 'inline; filename="'.$name.'"',
+            ]);
+        }
+
+        // 3) Fallback para public/storage/...
+        $publicStorage = public_path('storage/'.ltrim($p, '/'));
+        if (file_exists($publicStorage)) {
+            $name = basename($publicStorage);
+            return response()->file($publicStorage, [
+                'Cache-Control'      => 'private, max-age=0',
+                'Content-Disposition'=> 'inline; filename="'.$name.'"',
+            ]);
+        }
+
+        abort(404);
+    }
+
+    /**
      * Validação dos campos do formulário.
      */
     private function validated(Request $req): array

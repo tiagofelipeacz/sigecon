@@ -231,6 +231,8 @@ Route::prefix('admin')
                 Route::patch('anexos/{anexo}/toggle-ativo', [ConcursoAnexoController::class, 'toggleAtivo'])->name('anexos.toggle-ativo');
                 Route::patch('anexos/{anexo}/toggle-restrito', [ConcursoAnexoController::class, 'toggleRestrito'])->name('anexos.toggle-restrito');
                 Route::patch('anexos/{anexo}/toggle', [ConcursoAnexoController::class, 'toggleAtivo'])->name('anexos.toggle');
+                // >>> ABRIR anexo (stream/redirect) — incluído
+                Route::get('anexos/{anexo}/open', [ConcursoAnexoController::class, 'open'])->name('anexos.open');
 
                 // Cidades de Prova
                 Route::get('cidades', [CidadeProvaController::class, 'index'])->name('cidades.index');

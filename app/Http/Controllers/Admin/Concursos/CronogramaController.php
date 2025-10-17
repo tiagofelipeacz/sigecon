@@ -137,6 +137,7 @@ class CronogramaController extends Controller
 
     /**
      * Remove um item e corrige a ordem dos demais.
+     * Com SoftDeletes no Model, $item->delete() será "soft".
      */
     public function destroy(Concurso $concurso, Cronograma $item)
     {
@@ -144,7 +145,7 @@ class CronogramaController extends Controller
 
         DB::transaction(function () use ($concurso, $item) {
             $ordem = $item->ordem;
-            $item->delete();
+            $item->delete(); // <= Soft delete, se o Model usar SoftDeletes
             Cronograma::where('concurso_id', $concurso->id)
                 ->where('ordem', '>', $ordem)
                 ->decrement('ordem');

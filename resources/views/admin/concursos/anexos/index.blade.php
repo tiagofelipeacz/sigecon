@@ -68,6 +68,11 @@
     font-size:14px; line-height:1.35; font-weight:600; color:#111827;
     text-decoration:underline; text-underline-offset:2px; word-break:break-word;
   }
+  /* Impede mudar de cor após clicar */
+  .ax-title a:visited,
+  .ax-title a:hover,
+  .ax-title a:active { color:#111827; }
+
   .ax-title-sub{ margin-top:2px; }
 
   .ax-w-id{ width:70px; }
@@ -145,14 +150,9 @@
 
               if ($tipo === 'link') {
                   $url = $r->link_url ?? $r->url ?? null;
-              }
-              if (!$url && $path) {
-                  $p = str_replace('\\','/',$path);
-                  if (Str::startsWith($p, ['http://','https://']))      $url = $p;
-                  elseif (Str::startsWith($p, ['storage/','/storage/'])) $url = asset(ltrim($p,'/'));
-                  elseif (Storage::disk('public')->exists($p))           $url = Storage::url($p);
-                  elseif (file_exists(public_path($p)))                  $url = asset($p);
-                  elseif (file_exists(public_path('storage/'.$p)))       $url = asset('storage/'.$p);
+              } else {
+                  // Sempre usa a rota interna para abrir arquivo (funciona mesmo sem symlink)
+                  $url = route('admin.concursos.anexos.open', [$concurso, $r->id]);
               }
 
               $pubIni = $r->visivel_de  ?? null;
@@ -184,7 +184,7 @@
               <td>
                 <div class="ax-title" style="max-width:100%">
                   @if($url)
-                    <a href="{{ $url }}" target="_blank">{{ $r->titulo }}</a>
+                    <a href="{{ $url }}" target="_blank" rel="noopener">{{ $r->titulo }}</a>
                   @else
                     <span>{{ $r->titulo }}</span>
                   @endif

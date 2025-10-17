@@ -104,7 +104,7 @@ class ClientController extends Controller
             Storage::disk('public')->delete($client->logo_path);
         }
 
-        $client->delete();
+        $client->delete(); // Soft delete agora
 
         return redirect()
             ->route('admin.clientes.index')

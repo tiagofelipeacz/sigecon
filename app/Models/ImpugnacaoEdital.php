@@ -4,10 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class ImpugnacaoEdital extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     protected $table = 'impugnacoes_edital';
 
@@ -32,6 +33,7 @@ class ImpugnacaoEdital extends Model
         'responded_at'  => 'datetime',
         'created_at'    => 'datetime',
         'updated_at'    => 'datetime',
+        'deleted_at'    => 'datetime', // <- Soft Delete
     ];
 
     // compat: usar sempre ->respondido_em na aplicação

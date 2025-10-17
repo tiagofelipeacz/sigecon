@@ -7,10 +7,11 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Auth\MustVerifyEmail;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Candidato extends Authenticatable implements MustVerifyEmailContract
 {
-    use HasFactory, Notifiable, MustVerifyEmail;
+    use HasFactory, Notifiable, MustVerifyEmail, SoftDeletes;
 
     protected $table = 'candidatos';
 
@@ -35,6 +36,7 @@ class Candidato extends Authenticatable implements MustVerifyEmailContract
         'email_verified_at' => 'datetime',
         'last_login_at'     => 'datetime',
         'status'            => 'boolean',
+        'deleted_at'        => 'datetime', // Soft delete
     ];
 
     /**
@@ -73,5 +75,13 @@ class Candidato extends Authenticatable implements MustVerifyEmailContract
             return $cpf;
         }
         return substr($cpf,0,3).'.'.substr($cpf,3,3).'.'.substr($cpf,6,3).'-'.substr($cpf,9,2);
+    }
+
+    /**
+     * Inscrições vinculadas a este candidato.
+     */
+    public function inscricoes()
+    {
+        return $this->hasMany(\App\Models\Inscricao::class, 'candidato_id');
     }
 }

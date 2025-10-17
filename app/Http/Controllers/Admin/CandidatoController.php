@@ -10,6 +10,8 @@ use Illuminate\Database\QueryException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\Rule;
 
 class CandidatoController extends Controller
 {
@@ -71,9 +73,17 @@ class CandidatoController extends Controller
             }
         }
 
+        // Regra de unicidade do CPF respeitando SoftDeletes (deleted_at NULL)
+        $cpfUniqueRule = Rule::unique('candidatos','cpf')
+            ->whereNull('deleted_at');
+
+        if ($candidato && $candidato->id) {
+            $cpfUniqueRule = $cpfUniqueRule->ignore($candidato->id);
+        }
+
         $rules = [
             'nome' => ['required','string','max:255'],
-            'cpf'  => ['required','string','regex:/^\d{11}$/'],
+            'cpf'  => ['required','string','regex:/^\d{11}$/', $cpfUniqueRule],
             'email'=> ['nullable','email','max:150'],
             'telefone' => ['nullable','string','max:50'],
             'celular'  => ['nullable','string','max:50'],
@@ -121,6 +131,7 @@ class CandidatoController extends Controller
         $messages = [
             'cpf.required' => 'O CPF é obrigatório.',
             'cpf.regex'    => 'O CPF deve conter 11 dígitos (somente números).',
+            'cpf.unique'   => 'Este CPF já está em uso por outro candidato ativo.',
             'data_nascimento.date' => 'Data de nascimento inválida.',
             'foto.image' => 'A foto deve ser uma imagem.',
             'foto.mimes' => 'A foto deve ser JPG, PNG ou GIF.',
@@ -163,7 +174,8 @@ class CandidatoController extends Controller
         try {
             $candidato = Candidato::create($data);
         } catch (QueryException $e) {
-            if ((int)$e->errorInfo[1] === 1062) {
+            // Em geral validação já segura duplicidade; ainda assim tratamos
+            if ((int)($e->errorInfo[1] ?? 0) === 1062) {
                 return back()->withInput()->withErrors(['cpf' => 'CPF já cadastrado para outro candidato.']);
             }
             return back()->withInput()->withErrors(['general' => 'Erro ao salvar: ' . $e->getMessage()]);
@@ -184,6 +196,7 @@ class CandidatoController extends Controller
         $data = $this->validateData($request, $candidato);
 
         if ($request->hasFile('foto') && $request->file('foto')->isValid()) {
+            // não apaga já no update; apenas substitui o arquivo
             if ($candidato->foto_path) {
                 Storage::disk('public')->delete($candidato->foto_path);
             }
@@ -197,7 +210,7 @@ class CandidatoController extends Controller
         try {
             $candidato->update($data);
         } catch (QueryException $e) {
-            if ((int)$e->errorInfo[1] === 1062) {
+            if ((int)($e->errorInfo[1] ?? 0) === 1062) {
                 return back()->withInput()->withErrors(['cpf' => 'CPF já cadastrado para outro candidato.']);
             }
             return back()->withInput()->withErrors(['general' => 'Erro ao salvar: ' . $e->getMessage()]);
@@ -207,13 +220,36 @@ class CandidatoController extends Controller
         return $this->redirectAfterAction($action, $candidato, true)->with('success', 'Candidato atualizado com sucesso.');
     }
 
+    /**
+     * Soft delete: NÃO remove foto (permite restauração sem perda).
+     */
     public function destroy(Candidato $candidato)
     {
-        if ($candidato->foto_path) {
-            Storage::disk('public')->delete($candidato->foto_path);
-        }
         $candidato->delete();
-        return redirect()->route('admin.candidatos.index')->with('success', 'Excluído com sucesso.');
+        return redirect()->route('admin.candidatos.index')->with('success', 'Candidato arquivado com sucesso.');
+    }
+
+    /**
+     * Restaura um candidato soft-deletado.
+     */
+    public function restore(int $id)
+    {
+        $cand = Candidato::onlyTrashed()->findOrFail($id);
+        $cand->restore();
+        return redirect()->route('admin.candidatos.edit', $cand)->with('success', 'Candidato restaurado com sucesso.');
+    }
+
+    /**
+     * Exclusão definitiva: remove registro e apaga foto.
+     */
+    public function forceDestroy(int $id)
+    {
+        $cand = Candidato::onlyTrashed()->findOrFail($id);
+        if ($cand->foto_path) {
+            Storage::disk('public')->delete($cand->foto_path);
+        }
+        $cand->forceDelete();
+        return redirect()->route('admin.candidatos.index')->with('success', 'Candidato excluído definitivamente.');
     }
 
     public function export(Request $request): StreamedResponse
@@ -289,17 +325,21 @@ class CandidatoController extends Controller
 
     /**
      * Inscrições do candidato para a view que espera $rows
-     * Tenta trazer concurso e cargo via JOIN. Se não houver tabelas/colunas, faz fallback.
+     * Detecta dinamicamente a FK (concurso_id|edital_id) e oculta inscrições soft-deletadas.
      */
     public function inscricoes(Request $request, Candidato $candidato)
     {
         $limit = (int) $request->integer('limit', 50);
+
+        // Descobre qual coluna a tabela 'inscricoes' usa para referenciar concursos
+        $fkInsc = Schema::hasColumn('inscricoes', 'concurso_id') ? 'concurso_id' : 'edital_id';
+
         try {
-            // Ajuste os nomes das colunas/tabelas se seu schema for diferente
             $rows = DB::table('inscricoes as i')
-                ->leftJoin('concursos as co', 'co.id', '=', 'i.concurso_id')
+                ->leftJoin('concursos as co', 'co.id', '=', DB::raw("i.`{$fkInsc}`"))
                 ->leftJoin('cargos as ca', 'ca.id', '=', 'i.cargo_id')
                 ->where('i.candidato_id', $candidato->id)
+                ->whereNull('i.deleted_at') // ignora inscrições soft-deletadas
                 ->orderByDesc('i.created_at')
                 ->limit($limit)
                 ->get([
@@ -314,6 +354,7 @@ class CandidatoController extends Controller
             // Fallback minimalista (sem joins)
             $rows = DB::table('inscricoes')
                 ->where('candidato_id', $candidato->id)
+                ->whereNull('deleted_at')
                 ->orderByDesc('created_at')
                 ->limit($limit)
                 ->get(['id','status','created_at']);

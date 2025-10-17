@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Models\Inscricao;
 use App\Models\Candidato;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Database\QueryException;
 
 class InscritosController extends Controller
 {
@@ -79,7 +80,8 @@ class InscritosController extends Controller
         $qb = DB::table('inscricoes as i')
             ->leftJoin('users as u', 'u.id', '=', 'i.user_id')
             ->leftJoin('cargos as cg', 'cg.id', '=', 'i.cargo_id')
-            ->where("i.$fkInsc", $concurso->id);
+            ->where("i.$fkInsc", $concurso->id)
+            ->whereNull('i.deleted_at'); // <- ignora soft-deletados
 
         // Expor nome da localidade quando existir
         if (Schema::hasColumn('inscricoes', 'item_id') && Schema::hasTable('concursos_vagas_itens')) {
@@ -135,6 +137,7 @@ class InscritosController extends Controller
         $statusCounts = DB::table('inscricoes')
             ->select('status', DB::raw('count(*) as total'))
             ->where($fkInsc, $concurso->id)
+            ->whereNull('deleted_at') // <- ignora soft-deletados
             ->groupBy('status')
             ->pluck('total', 'status')
             ->toArray();
@@ -337,12 +340,32 @@ class InscritosController extends Controller
             'condicoes_especiais.*' => ['integer'],
         ]);
 
-        // Checa duplicidade por CPF no mesmo concurso/edital
-        $ja = DB::table('inscricoes')
-            ->where($fkInsc, $concurso->id)
-            ->where('cpf', $data['cpf'])
+        // ====== DUPLICIDADE (ativa): mesmo concurso + pessoa + cargo + localidade ======
+        // local_key (no seu banco foi criado como COALESCE(item_id,0)); aqui usamos o mesmo valor (item_id ou 0)
+        $locKey = (int) ($data['item_id'] ?? 0);
+
+        $dup = DB::table('inscricoes as i')
+            ->where("i.$fkInsc", $concurso->id)
+            ->whereNull('i.deleted_at')
+            ->where('i.cargo_id', (int)$data['cargo_id'])
+            ->when(Schema::hasColumn('inscricoes','local_key'),
+                fn($q) => $q->where('i.local_key', $locKey),
+                fn($q) => $q->when(Schema::hasColumn('inscricoes','item_id'),
+                        fn($qq) => $qq->where('i.item_id', $locKey),
+                        fn($qq) => $qq // se não tiver, ignora (fallback raro)
+                    )
+            )
+            ->when(!empty($data['candidato_id']),
+                fn($q) => $q->where('i.candidato_id', (int)$data['candidato_id']),
+                fn($q) => $q->where('i.cpf', $data['cpf'])
+            )
             ->exists();
-        if ($ja) return back()->withErrors(['cpf' => 'Este CPF já possui inscrição neste concurso.'])->withInput();
+
+        if ($dup) {
+            return back()->withErrors([
+                'cargo_id' => 'Já existe inscrição ativa deste candidato/CPF para este cargo e localidade.'
+            ])->withInput();
+        }
 
         // ===== Cargo fake -> cria real (apenas se o schema permitir)
         $cargoId = (int) $data['cargo_id'];
@@ -411,68 +434,81 @@ class InscritosController extends Controller
             $numeroManual = preg_replace('/\D+/', '', (string)($data['inscricao_numero'] ?? ''));
             if ($numeroManual === '') return back()->withErrors(['inscricao_numero' => 'Informe o número da inscrição.'])->withInput();
             if (Schema::hasColumn('inscricoes', 'numero')) {
-                $existeNumero = DB::table('inscricoes')->where($fkInsc, $concurso->id)->where('numero', $numeroManual)->exists();
+                $existeNumero = DB::table('inscricoes')
+                    ->where($fkInsc, $concurso->id)
+                    ->whereNull('deleted_at') // <- ignora soft-deletados
+                    ->where('numero', $numeroManual)
+                    ->exists();
                 if ($existeNumero) return back()->withErrors(['inscricao_numero' => 'Este número de inscrição já está em uso.'])->withInput();
             }
         }
 
-        // ===== Transação
-        [$inscricaoId, $numeroFinal] = DB::transaction(function() use ($concurso, $fkInsc, $data, $numeroManual, $cargoId) {
-            // bloqueia concurso p/ sequência
-            $conc = Concurso::query()->lockForUpdate()->find($concurso->id);
+        // ===== Transação (com tratamento de 1062)
+        try {
+            [$inscricaoId, $numeroFinal] = DB::transaction(function() use ($concurso, $fkInsc, $data, $numeroManual, $cargoId) {
+                // bloqueia concurso p/ sequência
+                $conc = Concurso::query()->lockForUpdate()->find($concurso->id);
 
-            // Calcula valor congelado (snapshot) e coluna destino na inscrição
-            $colInscValor   = $this->firstExistingColumn('inscricoes', ['valor_inscricao','taxa_inscricao','taxa','valor']);
-            $valorCongelado = $colInscValor
-                ? $this->resolveValorInscricao($concurso->id, $cargoId, $data['item_id'] ?? null)
-                : null;
+                // Calcula valor congelado (snapshot) e coluna destino na inscrição
+                $colInscValor   = $this->firstExistingColumn('inscricoes', ['valor_inscricao','taxa_inscricao','taxa','valor']);
+                $valorCongelado = $colInscValor
+                    ? $this->resolveValorInscricao($concurso->id, $cargoId, $data['item_id'] ?? null)
+                    : null;
 
-            $payload = [
-                $fkInsc          => $concurso->id,
-                'user_id'        => null,
-                'candidato_id'   => $data['candidato_id'] ?? null,
-                'cpf'            => $data['cpf'],
-                'nome_inscricao' => $data['nome_inscricao'] ?? $data['nome_candidato'],
-                'nome_candidato' => $data['nome_candidato'],
-                'nascimento'     => $data['nascimento'] ?? null,
-                'cargo_id'       => (int) $cargoId,
-                'modalidade'     => $data['modalidade'] ?? 'ampla',
-                // usa o valor obrigatório validado
-                'status'         => $data['status'],
-                'created_at'     => now(),
-                'updated_at'     => now(),
-            ];
+                $payload = [
+                    $fkInsc          => $concurso->id,
+                    'user_id'        => null,
+                    'candidato_id'   => $data['candidato_id'] ?? null,
+                    'cpf'            => $data['cpf'],
+                    'nome_inscricao' => $data['nome_inscricao'] ?? $data['nome_candidato'],
+                    'nome_candidato' => $data['nome_candidato'],
+                    'nascimento'     => $data['nascimento'] ?? null,
+                    'cargo_id'       => (int) $cargoId,
+                    'modalidade'     => $data['modalidade'] ?? 'ampla',
+                    // usa o valor obrigatório validado
+                    'status'         => $data['status'],
+                    'created_at'     => now(),
+                    'updated_at'     => now(),
+                ];
 
-            // Anexa o valor congelado se houver coluna correspondente
-            if ($colInscValor) {
-                $payload[$colInscValor] = $valorCongelado;
+                // Anexa o valor congelado se houver coluna correspondente
+                if ($colInscValor) {
+                    $payload[$colInscValor] = $valorCongelado;
+                }
+
+                // Localidade na inscrição (se existir coluna)
+                if (Schema::hasColumn('inscricoes', 'item_id') && !empty($data['item_id'])) {
+                    $payload['item_id'] = (int) $data['item_id'];
+                } elseif (Schema::hasColumn('inscricoes', 'localidade_id') && !empty($data['item_id'])) {
+                    $payload['localidade_id'] = (int) $data['item_id'];
+                }
+
+                // Número
+                if (($data['preenchimento'] ?? 'automatico') === 'manual') {
+                    $numeroFinal = $numeroManual;
+                    if (Schema::hasColumn('inscricoes', 'numero')) $payload['numero'] = $numeroFinal;
+                } else {
+                    $proximo = ((int) $conc->sequence_inscricao) + 1;
+                    $numeroFinal = $proximo;
+                    if (Schema::hasColumn('inscricoes', 'numero')) $payload['numero'] = $numeroFinal;
+                    $conc->sequence_inscricao = $proximo;
+                    $conc->updated_at = now();
+                    $conc->save();
+                }
+
+                $id = DB::table('inscricoes')->insertGetId($payload);
+
+                $this->persistCondicoesEspeciais($id, (array)($data['condicoes_especiais'] ?? []));
+                return [$id, $numeroFinal];
+            });
+        } catch (QueryException $e) {
+            if ((int)($e->errorInfo[1] ?? 0) === 1062) {
+                return back()->withErrors([
+                    'cargo_id' => 'Inscrição já existente para este candidato/CPF, cargo e localidade.'
+                ])->withInput();
             }
-
-            // Localidade na inscrição (se existir coluna)
-            if (Schema::hasColumn('inscricoes', 'item_id') && !empty($data['item_id'])) {
-                $payload['item_id'] = (int) $data['item_id'];
-            } elseif (Schema::hasColumn('inscricoes', 'localidade_id') && !empty($data['item_id'])) {
-                $payload['localidade_id'] = (int) $data['item_id'];
-            }
-
-            // Número
-            if (($data['preenchimento'] ?? 'automatico') === 'manual') {
-                $numeroFinal = $numeroManual;
-                if (Schema::hasColumn('inscricoes', 'numero')) $payload['numero'] = $numeroFinal;
-            } else {
-                $proximo = ((int) $conc->sequence_inscricao) + 1;
-                $numeroFinal = $proximo;
-                if (Schema::hasColumn('inscricoes', 'numero')) $payload['numero'] = $numeroFinal;
-                $conc->sequence_inscricao = $proximo;
-                $conc->updated_at = now();
-                $conc->save();
-            }
-
-            $id = DB::table('inscricoes')->insertGetId($payload);
-
-            $this->persistCondicoesEspeciais($id, (array)($data['condicoes_especiais'] ?? []));
-            return [$id, $numeroFinal];
-        });
+            throw $e;
+        }
 
         if (!$numeroFinal) $numeroFinal = (int)$concurso->sequence_inscricao + (int)$inscricaoId;
 
@@ -492,6 +528,7 @@ class InscritosController extends Controller
             ->leftJoin('cargos as cg', 'cg.id', '=', 'i.cargo_id')
             ->where('i.id', $inscricaoId)
             ->where("i.$fkInsc", $concurso->id)
+            ->whereNull('i.deleted_at') // <- não abre soft-deletado
             ->select('i.*', 'cg.nome as cargo_nome')
             ->first();
 
@@ -774,10 +811,17 @@ class InscritosController extends Controller
     {
         [$fkInsc] = $this->fkInscricoes();
 
-        DB::table('inscricoes')
+        // Soft delete usando Eloquent (respeita SoftDeletes)
+        $row = Inscricao::query()
             ->where($fkInsc, $concurso->id)
             ->where('id', $inscricao)
-            ->delete();
+            ->first();
+
+        if (!$row) {
+            return back()->with('ok', 'Inscrição já removida.');
+        }
+
+        $row->delete();
 
         return back()->with('ok', 'Inscrição excluída.');
     }
@@ -792,26 +836,56 @@ class InscritosController extends Controller
             return response()->json(['ok'=>false,'message'=>'CPF inválido. Digite 11 dígitos.'], 422);
         }
 
-        $jaInscrito = DB::table('inscricoes')
-            ->where($fkInsc, $concurso->id)
-            ->where(function($w) use ($cpf) {
-                if (Schema::hasColumn('inscricoes', 'documento')) $w->where('cpf', $cpf)->orWhere('documento', $cpf);
-                else $w->where('cpf', $cpf);
-            })->exists();
+        // Se a tela enviar cargo/localidade, checamos duplicidade precisa
+        $cargoId = (int) $request->input('cargo_id', 0);
+        $itemId  = (int) $request->input('item_id', 0);
+        $candId  = $request->filled('candidato_id') ? (int)$request->input('candidato_id') : null;
 
-        if ($jaInscrito) {
+        $dupPreciso = false;
+        if ($cargoId > 0) {
+            $locKey = $itemId; // sua local_key é baseada em item_id
+
+            $dupPreciso = DB::table('inscricoes as i')
+                ->where("i.$fkInsc", $concurso->id)
+                ->whereNull('i.deleted_at')
+                ->where('i.cargo_id', $cargoId)
+                ->when(Schema::hasColumn('inscricoes','local_key'),
+                    fn($q) => $q->where('i.local_key', $locKey),
+                    fn($q) => $q->when(Schema::hasColumn('inscricoes','item_id'),
+                            fn($qq) => $qq->where('i.item_id', $locKey),
+                            fn($qq) => $qq
+                        )
+                )
+                ->when(!is_null($candId),
+                    fn($q) => $q->where('i.candidato_id', $candId),
+                    fn($q) => $q->where('i.cpf', $cpf)
+                )
+                ->exists();
+        }
+
+        if ($dupPreciso) {
             return response()->json([
-                'ok'=>true,'exists'=>true,'ja_inscrito'=>true,
-                'message'=>'Este CPF já possui inscrição neste concurso.',
+                'ok'          => true,
+                'exists'      => true,
+                'ja_inscrito' => true,
+                'message'     => 'Este CPF/candidato já possui inscrição ativa neste cargo e localidade.',
             ]);
         }
+
+        // Fallback: apenas dizer se já tem alguma inscrição no concurso por CPF (sem travar)
+        $jaNoConcurso = DB::table('inscricoes')
+            ->where($fkInsc, $concurso->id)
+            ->whereNull('deleted_at')
+            ->where('cpf', $cpf)
+            ->exists();
 
         $cand = Candidato::query()->where('cpf', $cpf)->first();
 
         return response()->json([
             'ok'=>true,
             'exists'=>(bool)$cand,
-            'ja_inscrito'=>false,
+            'ja_inscrito'=>false, // não bloqueia sem cargo/localidade
+            'ja_no_concurso'=>$jaNoConcurso,
             'candidato_id'=>$cand->id ?? null,
             'candidato'=>$cand ? [
                 'nome'=>$cand->nome ?? $cand->name ?? null,
@@ -819,7 +893,9 @@ class InscritosController extends Controller
                 'telefone'=>$cand->telefone ?? $cand->phone ?? null,
             ] : null,
             'message'=>$cand
-                ? 'CPF localizado. Dados do candidato encontrados.'
+                ? ($jaNoConcurso
+                    ? 'CPF localizado. Já há inscrições neste concurso, mas você pode prosseguir para outro cargo/localidade.'
+                    : 'CPF localizado. Dados do candidato encontrados.')
                 : 'CPF não encontrado. Você poderá cadastrar os dados.',
         ]);
     }
