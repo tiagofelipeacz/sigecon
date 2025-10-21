@@ -34,40 +34,29 @@ class SiteSettingsController extends Controller
 
     /**
      * Converte um caminho relativo/absoluto para URL pública.
-     * Prefere a rota /media/{path} (media.public) quando disponível.
+     * (Instância)
      */
     private function publicUrlFromAny(string $p): string
     {
         $p = trim(str_replace('\\','/',$p));
         if ($p === '') return '';
-
-        // URL absoluta / base64
         if (Str::startsWith($p, ['http://','https://','data:image'])) {
             return $p;
         }
-
-        // Normaliza prefixos comuns
         if (Str::startsWith($p, ['/storage/','storage/'])) {
-            $p = ltrim(preg_replace('#^/?storage/#i', '', $p), '/'); // remove "storage/"
+            return asset(ltrim($p,'/'));
         }
-
         $norm = ltrim($p,'/');
-        if (Str::startsWith($norm,'public/')) {
-            $norm = substr($norm,7); // remove "public/"
-        }
+        if (Str::startsWith($norm,'public/')) $norm = substr($norm,7);
 
-        // 1) Se a rota /media existir, usa ela (independe de symlink)
-        if (app('router')->has('media.public')) {
-            return route('media.public', ['path' => $norm]);
-        }
-
-        // 2) Fallbacks
         if (Storage::disk('public')->exists($norm)) {
             return asset('storage/'.$norm);
         }
+        if (file_exists(public_path($p)))               return asset($p);
         if (file_exists(public_path($norm)))            return asset($norm);
         if (file_exists(public_path('storage/'.$norm))) return asset('storage/'.$norm);
 
+        // último recurso: assume que está em storage público
         return asset('storage/'.$norm);
     }
 
@@ -120,7 +109,7 @@ class SiteSettingsController extends Controller
         $site['banner_title']  = (string)($row->banner_title ?? $site['banner_title']);
         $site['banner_sub']    = (string)($row->banner_sub   ?? $site['banner_sub'] );
 
-        // Banner
+        // Banner: aceita banner_url ou banner_path / banner / image / hero_image / hero_url
         $bannerCand = null;
         foreach (['banner_url','banner_path','banner','image','hero_image','hero_url'] as $k) {
             if (!empty($row->{$k})) { $bannerCand = trim((string)$row->{$k}); break; }
@@ -130,7 +119,7 @@ class SiteSettingsController extends Controller
             $site['banner_path'] = $bannerCand;
         }
 
-        // Logo
+        // LOGO: aceita várias colunas
         $logoCand = null;
         foreach (['logo_url','logo_path','logo','logotipo','logo_image','site_logo','brand_logo','header_logo'] as $k) {
             if (!empty($row->{$k})) { $logoCand = trim((string)$row->{$k}); break; }
@@ -144,29 +133,39 @@ class SiteSettingsController extends Controller
     }
 
     /**
-     * Método público (e helper estático) para obter o array de site em qualquer lugar.
+     * (NOVA) Versão estática para ser usada nas views/controladores públicos.
+     * Ex.:  $site = \App\Http\Controllers\Admin\Config\SiteSettingsController::current();
      */
-    public function siteArray(): array
-    {
-        return $this->getSiteArray();
-    }
-
-    public static function fetch(): array
+    public static function current(): array
     {
         try {
+            // Reaproveita toda a lógica existente sem duplicar
             return app(self::class)->getSiteArray();
         } catch (\Throwable $e) {
-            // fallback seguro caso algo dê errado
+            // Defaults de segurança (mesmos do getSiteArray)
             return [
-                'brand'        => 'GestaoConcursos',
-                'primary'      => '#0f172a',
-                'accent'       => '#111827',
-                'banner_title' => 'Concursos e Processos Seletivos',
-                'banner_sub'   => 'Inscreva-se, acompanhe publicações e consulte resultados.',
-                'banner_url'   => null,
-                'logo_url'     => null,
+                'brand'         => 'GestaoConcursos',
+                'primary'       => '#0f172a',
+                'primary_color' => '#0f172a',
+                'accent'        => '#111827',
+                'accent_color'  => '#111827',
+                'banner_title'  => 'Concursos e Processos Seletivos',
+                'banner_sub'    => 'Inscreva-se, acompanhe publicações e consulte resultados.',
+                'banner_url'    => null,
+                'banner_path'   => null,
+                'logo_url'      => null,
+                'logo_path'     => null,
             ];
         }
+    }
+
+    /**
+     * (OPCIONAL) Helper estático para converter caminho em URL pública de outros lugares.
+     */
+    public static function publicUrl(?string $path): ?string
+    {
+        if (!$path) return null;
+        return app(self::class)->publicUrlFromAny($path);
     }
 
     /**
@@ -237,15 +236,17 @@ class SiteSettingsController extends Controller
         if (in_array('banner_title', $cols, true)) $payload['banner_title'] = $bannerTitle;
         if (in_array('banner_sub',   $cols, true)) $payload['banner_sub']   = $bannerSub;
 
-        // >>> BANNER <<<
+        // >>> BANNER: só altera se o usuário realmente enviou arquivo/URL <<<
         if ($hasBannerUpload || $hasBannerUrl) {
             if ($hasBannerUpload) {
                 $stored = $request->file('banner')->store('site', ['disk' => 'public']); // ex: site/abc.jpg
 
+                // zera banner_url se existir, pois agora o "dono" é o arquivo
                 if (in_array('banner_url', $cols, true)) {
                     $payload['banner_url'] = null;
                 }
 
+                // escolhe a melhor coluna para guardar o path
                 if (in_array('banner_path', $cols, true)) {
                     $payload['banner_path'] = $stored;
                 } elseif (in_array('banner', $cols, true)) {
@@ -255,13 +256,13 @@ class SiteSettingsController extends Controller
                 } elseif (in_array('hero_image', $cols, true)) {
                     $payload['hero_image'] = $stored;
                 }
-            } else {
+            } else { // $hasBannerUrl
                 $url = $bannerUrlIn;
 
                 if (in_array('banner_url', $cols, true)) {
                     $payload['banner_url'] = $url;
                 } elseif (in_array('banner_path', $cols, true)) {
-                    $payload['banner_path'] = $url;
+                    $payload['banner_path'] = $url; // ok armazenar URL aqui, o loader trata
                 } elseif (in_array('banner', $cols, true)) {
                     $payload['banner'] = $url;
                 } elseif (in_array('image', $cols, true)) {
@@ -271,16 +272,19 @@ class SiteSettingsController extends Controller
                 }
             }
         }
+        // Se NÃO houve upload/URL, não encosta em nenhum campo de banner — preserva!
 
-        // >>> LOGO <<<
+        // >>> LOGO: só altera se o usuário realmente enviou arquivo/URL <<<
         if ($hasLogoUpload || $hasLogoUrl) {
             if ($hasLogoUpload) {
                 $stored = $request->file('logo')->store('site', ['disk' => 'public']); // ex: site/logo-xyz.png
 
+                // zera logo_url se existir, pois agora o "dono" é o arquivo
                 if (in_array('logo_url', $cols, true)) {
                     $payload['logo_url'] = null;
                 }
 
+                // escolhe a melhor coluna para guardar o path
                 if (in_array('logo_path', $cols, true)) {
                     $payload['logo_path'] = $stored;
                 } elseif (in_array('logo', $cols, true)) {
@@ -296,13 +300,13 @@ class SiteSettingsController extends Controller
                 } elseif (in_array('header_logo', $cols, true)) {
                     $payload['header_logo'] = $stored;
                 }
-            } else {
+            } else { // $hasLogoUrl
                 $url = $logoUrlIn;
 
                 if (in_array('logo_url', $cols, true)) {
                     $payload['logo_url'] = $url;
                 } elseif (in_array('logo_path', $cols, true)) {
-                    $payload['logo_path'] = $url;
+                    $payload['logo_path'] = $url; // loader resolve como público
                 } elseif (in_array('logo', $cols, true)) {
                     $payload['logo'] = $url;
                 } elseif (in_array('logotipo', $cols, true)) {
@@ -318,6 +322,7 @@ class SiteSettingsController extends Controller
                 }
             }
         }
+        // Se NÃO houve upload/URL, não encosta em nenhum campo da logo — preserva!
 
         // timestamps (se existirem)
         $now = now();
@@ -335,6 +340,7 @@ class SiteSettingsController extends Controller
                 DB::table($t)->where('id',1)->update($payload);
             }
         } else {
+            // Sem coluna id: atualiza o primeiro, senão insere
             $first = DB::table($t)->first();
             if ($first) {
                 DB::table($t)->limit(1)->update($payload);
@@ -348,7 +354,10 @@ class SiteSettingsController extends Controller
     }
 
     /**
-     * Remover APENAS o banner.
+     * Remover APENAS o banner (quando clicar no botão "Remover banner").
+     * Aceita DELETE em:
+     *  - /admin/config/site/banner
+     *  - /admin/site/banner
      */
     public function destroyBanner(Request $request)
     {
@@ -357,6 +366,7 @@ class SiteSettingsController extends Controller
             return back()->with('ok', 'Nada para remover.');
         }
 
+        // Lê a linha para tentar excluir arquivo físico
         $row = Schema::hasColumn($t,'id')
             ? (DB::table($t)->where('id',1)->first() ?? DB::table($t)->first())
             : DB::table($t)->first();
@@ -369,6 +379,7 @@ class SiteSettingsController extends Controller
         }
         if (in_array('updated_at', $cols, true)) $payload['updated_at'] = now();
 
+        // Exclui arquivo físico se havia path em disco público
         if ($row) {
             $cand = null;
             foreach (['banner_path','banner','image','hero_image'] as $c) {
@@ -391,7 +402,10 @@ class SiteSettingsController extends Controller
     }
 
     /**
-     * Remover APENAS a LOGO.
+     * Remover APENAS a LOGO (quando clicar no botão "Remover logo").
+     * Aceita DELETE em:
+     *  - /admin/config/site/logo
+     *  - /admin/site/logo
      */
     public function destroyLogo(Request $request)
     {
@@ -400,6 +414,7 @@ class SiteSettingsController extends Controller
             return back()->with('ok', 'Nada para remover.');
         }
 
+        // Lê a linha para tentar excluir arquivo físico
         $row = Schema::hasColumn($t,'id')
             ? (DB::table($t)->where('id',1)->first() ?? DB::table($t)->first())
             : DB::table($t)->first();
@@ -412,6 +427,7 @@ class SiteSettingsController extends Controller
         }
         if (in_array('updated_at', $cols, true)) $payload['updated_at'] = now();
 
+        // Exclui arquivo físico se havia path em disco público
         if ($row) {
             $cand = null;
             foreach (['logo_path','logo','logotipo','logo_image','site_logo','brand_logo','header_logo'] as $c) {
@@ -435,6 +451,7 @@ class SiteSettingsController extends Controller
 
     /**
      * HTML mínimo de fallback (caso a view não exista).
+     * (Sem <form> aninhado; inclui campos de LOGO.)
      */
     private function fallbackHtml(Request $request, array $site): string
     {
