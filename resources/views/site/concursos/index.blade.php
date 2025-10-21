@@ -89,10 +89,21 @@
     border:1px solid #e5e7eb; background:#fff; padding:8px 12px;
     border-radius:10px; cursor:pointer; text-decoration:none;
     color:#111827; /* contraste garantido no hero */
+    transition: background .18s ease, filter .18s ease, transform .12s ease, box-shadow .18s ease;
   }
-  .btn:hover{ background:#f9fafb; }
-  .btn.primary{ background:var(--site-accent); border-color:var(--site-accent); color:#fff; }
-  .btn.primary:hover{ filter:brightness(1.05); }
+  /* hover claro apenas para botões não primários */
+  .btn:not(.primary):hover{ background:#f4f6f8; }
+  .btn.primary{
+    background:var(--site-accent); border-color:var(--site-accent); color:#fff;
+  }
+  /* mantém o primário escuro no hover (sem ficar branco) */
+  .btn.primary:hover{
+    background:var(--site-accent);
+    border-color:var(--site-accent);
+    color:#fff;
+    filter:brightness(1.05);
+    transform:translateY(-1px);
+  }
   .chip{ display:inline-flex; align-items:center; gap:8px; border:1px solid #e5e7eb; padding:8px 12px; border-radius:999px; background:#fff; font-size:14px; text-decoration:none; color:#111827; }
   .chip.active{ background:#eef2ff; border-color:#e0e7ff; color:#1e3a8a; }
   .pill-ok{ display:inline-block; font-weight:700; font-size:12px; background:#16a34a; color:#fff; padding:6px 10px; border-radius:6px; }

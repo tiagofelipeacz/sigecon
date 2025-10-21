@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Carbon\Carbon;
+use Illuminate\Support\Collection;
 
 class ConcursoController extends Controller
 {
@@ -40,8 +42,8 @@ class ConcursoController extends Controller
         }
 
         // ====== Período de inscrições ======
-        $inscStartCandidates = ['inscricoes_inicio','inicio_inscricao','dt_inicio_inscricao','inscricao_inicio','inscricoes_de','inicio_inscricoes'];
-        $inscEndCandidates   = ['inscricoes_fim','fim_inscricao','dt_fim_inscricao','inscricao_fim','inscricoes_ate','fim_inscricoes'];
+        $inscStartCandidates = ['inscricoes_inicio','inicio_inscricao','dt_inicio_inscricao','inscricao_inicio','inscricoes_de','inicio_inscricoes','inscricoes_ini','insc_inicio'];
+        $inscEndCandidates   = ['inscricoes_fim','fim_inscricao','dt_fim_inscricao','inscricao_fim','inscricoes_ate','fim_inscricoes','insc_fim'];
         $inscIniCol = null; $inscFimCol = null;
         foreach ($inscStartCandidates as $c) if ($hasCol($tblConcursos,$c)) { $inscIniCol = $c; break; }
         foreach ($inscEndCandidates   as $c) if ($hasCol($tblConcursos,$c)) { $inscFimCol = $c; break; }
@@ -50,7 +52,7 @@ class ConcursoController extends Controller
 
         // ====== Pedidos de isenção ======
         $isenIniCol = null; $isenFimCol = null;
-        foreach (['isencao_inicio','inicio_isencao','isen_inicio','pedidos_isencao_inicio','isencoes_inicio'] as $c) {
+        foreach (['isencao_inicio','inicio_isencao','isen_inicio','pedidos_isencao_inicio','isencoes_inicio','isencao_ini'] as $c) {
             if ($hasCol($tblConcursos,$c)) { $isenIniCol = $c; break; }
         }
         foreach (['isencao_fim','fim_isencao','isen_fim','pedidos_isencao_fim','isencoes_fim'] as $c) {
@@ -68,7 +70,7 @@ class ConcursoController extends Controller
 
         // ====== Número do edital ======
         $editalCol = null;
-        foreach (['edital','edital_numero','num_edital','n_edital','edital_n','numero_edital'] as $c) {
+        foreach (['edital','edital_numero','num_edital','n_edital','edital_n','numero_edital','edital_num'] as $c) {
             if ($hasCol($tblConcursos,$c)) { $editalCol = $c; break; }
         }
         if ($editalCol) $select[] = DB::raw("co.`{$editalCol}` as edital_num");
@@ -103,34 +105,6 @@ class ConcursoController extends Controller
             $qb->leftJoin("{$tblClients} as cl", 'cl.id', '=', 'co.client_id');
             if ($hasCol($tblClients,'deleted_at')) {
                 $qb->whereNull('cl.deleted_at');
-            }
-        }
-
-        // >>> total de vagas por subselect (evita N+1)
-        if ($sub = $this->totalVagasSubquery()) {
-            $qb->leftJoinSub($sub, 'vg', function($j){
-                $j->on('vg.concurso_id', '=', 'co.id');
-            });
-
-            // coluna de total no concursos: prioriza 'vagas_total' (seu banco), depois 'total_vagas'
-            $concursosTotalCol = null;
-            foreach (['vagas_total','total_vagas'] as $c) {
-                if ($hasCol($tblConcursos, $c)) { $concursosTotalCol = $c; break; }
-            }
-
-            if ($concursosTotalCol) {
-                $qb->addSelect(DB::raw("COALESCE(vg.total_vagas, co.`{$concursosTotalCol}`, 0) as total_vagas"));
-            } else {
-                $qb->addSelect(DB::raw('COALESCE(vg.total_vagas, 0) as total_vagas'));
-            }
-        } else {
-            // Sem subselect, tenta coluna no concursos
-            $concursosTotalCol = null;
-            foreach (['vagas_total','total_vagas'] as $c) if ($hasCol($tblConcursos,$c)) { $concursosTotalCol = $c; break; }
-            if ($concursosTotalCol) {
-                $qb->addSelect(DB::raw("COALESCE(co.`{$concursosTotalCol}`, 0) as total_vagas"));
-            } else {
-                $qb->addSelect(DB::raw('0 as total_vagas'));
             }
         }
 
@@ -214,7 +188,7 @@ class ConcursoController extends Controller
 
         $select = ['co.id'];
         if ($hasCol($tblConcursos,'titulo'))     $select[] = 'co.titulo';
-        if ($hasCol($tblConcursos,'descricao'))  $select[] = 'co.descricao';
+        if ($hasCol($tblConcursos,'descricao'))  $select[] = 'co.descricao'; // << corrigido: NADA de "desicao"
         if ($hasCol($tblConcursos,'ativo'))      $select[] = 'co.ativo';
         if ($hasCol($tblConcursos,'created_at')) $select[] = 'co.created_at';
 
@@ -224,6 +198,38 @@ class ConcursoController extends Controller
             $select[] = DB::raw('co.id as slug');
         }
 
+        // ====== Datas de inscrição / isenção / prova / edital (aliases padronizados) ======
+        $inscStartCandidates = ['inscricoes_inicio','inicio_inscricao','dt_inicio_inscricao','inscricao_inicio','inscricoes_de','inicio_inscricoes','inscricoes_ini','insc_inicio'];
+        $inscEndCandidates   = ['inscricoes_fim','fim_inscricao','dt_fim_inscricao','inscricao_fim','inscricoes_ate','fim_inscricoes','insc_fim'];
+        $inscIniCol = null; $inscFimCol = null;
+        foreach ($inscStartCandidates as $c) if ($hasCol($tblConcursos,$c)) { $inscIniCol = $c; break; }
+        foreach ($inscEndCandidates   as $c) if ($hasCol($tblConcursos,$c)) { $inscFimCol = $c; break; }
+        if ($inscIniCol) $select[] = DB::raw("co.`{$inscIniCol}` as inscricoes_ini");
+        if ($inscFimCol) $select[] = DB::raw("co.`{$inscFimCol}` as inscricoes_fim");
+
+        $isenIniCol = null; $isenFimCol = null;
+        foreach (['isencao_inicio','inicio_isencao','isen_inicio','pedidos_isencao_inicio','isencoes_inicio','isencao_ini'] as $c) {
+            if ($hasCol($tblConcursos,$c)) { $isenIniCol = $c; break; }
+        }
+        foreach (['isencao_fim','fim_isencao','isen_fim','pedidos_isencao_fim','isencoes_fim'] as $c) {
+            if ($hasCol($tblConcursos,$c)) { $isenFimCol = $c; break; }
+        }
+        if ($isenIniCol) $select[] = DB::raw("co.`{$isenIniCol}` as isencao_ini");
+        if ($isenFimCol) $select[] = DB::raw("co.`{$isenFimCol}` as isencao_fim");
+
+        $provaCol = null;
+        foreach (['data_prova_objetiva','prova_objetiva_data','dt_prova_objetiva','aplicacao_prova','data_prova','prova_data'] as $c) {
+            if ($hasCol($tblConcursos,$c)) { $provaCol = $c; break; }
+        }
+        if ($provaCol) $select[] = DB::raw("co.`{$provaCol}` as prova_data");
+
+        $editalCol = null;
+        foreach (['edital','edital_numero','num_edital','n_edital','edital_n','numero_edital','edital_num'] as $c) {
+            if ($hasCol($tblConcursos,$c)) { $editalCol = $c; break; }
+        }
+        if ($editalCol) $select[] = DB::raw("co.`{$editalCol}` as edital_num");
+
+        // JOIN opcional com clients (nome + imagens)
         $joinClients = Schema::hasTable($tblClients);
         if ($joinClients) {
             $clienteNomeAdded = false;
@@ -274,12 +280,35 @@ class ConcursoController extends Controller
         }
         $row->hero_image = $this->pickClientImage($clientRow);
 
+        // ===== Calcula se a inscrição está aberta (booleano consumido pela view) =====
+        $row->inscricao_aberta = $this->calcInscricaoAberta(
+            $row->inscricoes_ini ?? null,
+            $row->inscricoes_fim ?? null
+        );
+
+        // ===== Blocos dinâmicos =====
+        $anexos     = $this->fetchFirstByConcursoId($row->id, ['concursos_anexos','concurso_anexos','concursos_publicacoes','publicacoes','anexos']);
+        $cronograma = $this->fetchFirstByConcursoId($row->id, ['concursos_cronograma','cronogramas','cronograma','concursos_eventos','eventos']);
+
+        // VAGAS: tenta resumo por cargo (dinâmico); se não der, usa a primeira tabela "genérica"
+        $vagasResumo = $this->buildVagasResumo($row->id);
+        $vagas       = $vagasResumo->isNotEmpty()
+            ? $vagasResumo
+            : $this->fetchFirstByConcursoId($row->id, ['concursos_vagas_itens','concursos_vagas','vagas','cargos_itens','vagas_itens','vaga_itens']);
+
         // Configs do site (dinâmicas)
         $site = $this->loadSiteConfig();
         $site['banner_title'] = $site['banner_title'] ?: 'Detalhes do Concurso';
         $site['banner_sub']   = $site['banner_sub']   ?: '';
 
-        return view('site.concursos.show', ['concurso' => $row, 'site' => $site]);
+        return view('site.concursos.show', [
+            'concurso'   => $row,
+            'site'       => $site,
+            'anexos'     => $anexos,
+            'cronograma' => $cronograma,
+            'vagas'      => $vagas,            // resumo por cargo com alias "vagas"
+            // 'vagas_locais' => $this->buildVagasLocais($row->id), // use se quiser listar por localidade na view
+        ]);
     }
 
     /**
@@ -302,37 +331,30 @@ class ConcursoController extends Controller
             $p = trim((string)$p);
             if ($p === '') continue;
 
-            // Normaliza barras (Windows)
             $p = str_replace('\\', '/', $p);
 
-            // URL absoluta ou base64
             if (Str::startsWith($p, ['http://','https://','data:image'])) {
                 return $p;
             }
-
-            // Se já vier como /storage/... (ou storage/...), devolve como asset direto
             if (Str::startsWith($p, ['/storage/','storage/'])) {
                 return asset(ltrim($p,'/'));
             }
 
-            // Normaliza: remove barra inicial e prefixo 'public/'
             $norm = ltrim($p, '/');
             if (Str::startsWith($norm, 'public/')) {
                 $norm = substr($norm, 7);
             }
 
-            // Existe no disco 'public'? então expõe como /storage/{path}
             if (Storage::disk('public')->exists($norm)) {
                 return asset('storage/'.$norm);
             }
 
-            // Tentativas diretas no /public
             if (file_exists(public_path($p)))                return asset($p);
             if (file_exists(public_path($norm)))             return asset($norm);
             if (file_exists(public_path('storage/'.$norm)))  return asset('storage/'.$norm);
         }
 
-        return null; // usa placeholder no blade
+        return null;
     }
 
     /**
@@ -343,28 +365,23 @@ class ConcursoController extends Controller
         $hasTable = fn($t) => Schema::hasTable($t);
         $hasCol   = fn($t,$c) => Schema::hasColumn($t,$c);
 
-        // Prioriza o nome que você tem: concursos_vagas_itens
         $itemTables  = ['concursos_vagas_itens','concurso_vaga_itens','vaga_itens','vagas_itens','cargos_itens','cargo_localidades','itens'];
         $cargoTables = ['cargos','concursos_cargos','vaga_cargos','vagas_cargos','concurso_cargos'];
 
-        // ordem de preferência para quantidade (inclui 'vagas_totais'!)
         $qtyCandidates = ['vagas_totais','qtd_total','quantidade','qtd','vagas','qtde','qtd_vagas'];
 
-        // encontra a tabela de itens
         $tblItens = null;
         foreach ($itemTables as $t) {
             if ($hasTable($t)) { $tblItens = $t; break; }
         }
         if (!$tblItens) return null;
 
-        // quais colunas de quantidade existem
         $qtyCols = [];
         foreach ($qtyCandidates as $qc) {
             if ($hasCol($tblItens,$qc)) $qtyCols[] = $qc;
         }
         if (empty($qtyCols)) return null;
 
-        // Se só houver 1 coluna de quantidade, não precisa de GREATEST
         if (count($qtyCols) === 1) {
             $qtyExpr = "COALESCE(it.`{$qtyCols[0]}`,0)";
         } else {
@@ -372,12 +389,10 @@ class ConcursoController extends Controller
             $qtyExpr = 'GREATEST('.implode(',', $parts).')';
         }
 
-        // filtros auxiliares
         $crField = null;
         foreach (['cr','cadastro_reserva'] as $c)
             if ($hasCol($tblItens,$c)) { $crField = $c; break; }
 
-        // caso A: itens possuem concurso_id
         if ($hasCol($tblItens,'concurso_id')) {
             $q = DB::table("$tblItens as it")
                 ->select('it.concurso_id', DB::raw("SUM($qtyExpr) as total_vagas"));
@@ -392,7 +407,6 @@ class ConcursoController extends Controller
             return $q->groupBy('it.concurso_id');
         }
 
-        // caso B: itens possuem cargo_id e precisamos do join em cargos.* com concurso_id
         if ($hasCol($tblItens,'cargo_id')) {
             $tblCargos = null;
             foreach ($cargoTables as $t) {
@@ -431,7 +445,6 @@ class ConcursoController extends Controller
             if ($val !== null) return (int) $val;
         }
 
-        // fallback: coluna no concursos (prioriza 'vagas_total', depois 'total_vagas')
         $col = null;
         foreach (['vagas_total','total_vagas'] as $c)
             if (Schema::hasColumn('concursos', $c)) { $col = $c; break; }
@@ -441,6 +454,146 @@ class ConcursoController extends Controller
         }
 
         return 0;
+    }
+
+    /** Calcula booleano de inscrição aberta a partir de (ini, fim). */
+    private function calcInscricaoAberta($iniRaw, $fimRaw): bool
+    {
+        if (!$iniRaw && !$fimRaw) return false;
+        try {
+            $now = Carbon::now();
+            $ini = $iniRaw ? Carbon::parse($iniRaw)->startOfDay() : null;
+            $fim = $fimRaw ? Carbon::parse($fimRaw)->endOfDay()   : null;
+
+            if     ($ini && $fim)  return $now->between($ini, $fim);
+            elseif ($ini && !$fim) return $now->greaterThanOrEqualTo($ini);
+            elseif (!$ini && $fim) return $now->lessThanOrEqualTo($fim);
+        } catch (\Throwable $e) {}
+        return false;
+    }
+
+    /**
+     * Busca a primeira tabela existente (entre candidatos) que possua concurso_id
+     * e retorna todos os itens do concurso. Útil para anexos/cronograma.
+     */
+    private function fetchFirstByConcursoId(int $concursoId, array $candidateTables): Collection
+    {
+        foreach ($candidateTables as $t) {
+            if (Schema::hasTable($t) && Schema::hasColumn($t,'concurso_id')) {
+                $orderCol = Schema::hasColumn($t,'ordem')       ? 'ordem' :
+                            (Schema::hasColumn($t,'created_at') ? 'created_at' :
+                            (Schema::hasColumn($t,'data')       ? 'data' : 'id'));
+
+                $dir = $orderCol === 'ordem' ? 'asc' : 'desc';
+
+                return DB::table($t)
+                    ->where('concurso_id', $concursoId)
+                    ->orderBy($orderCol, $dir)
+                    ->get();
+            }
+        }
+        return collect();
+    }
+
+    /**
+     * Resumo de vagas por CARGO para uso na view pública.
+     * Retorna colunas: cargo, vagas (int), codigo (opcional), nivel (opcional).
+     */
+    private function buildVagasResumo(int $concursoId): Collection
+    {
+        if (
+            !Schema::hasTable('concursos_vagas_itens') ||
+            !Schema::hasTable('concursos_vagas_cargos')
+        ) {
+            return collect();
+        }
+
+        $hasVagasTotais = Schema::hasColumn('concursos_vagas_itens', 'vagas_totais');
+        $usaLocalString = Schema::hasColumn('concursos_vagas_itens', 'local');
+
+        // soma de cotas por item
+        $subCotas = DB::table('concursos_vagas_cotas')
+            ->selectRaw('item_id, SUM(vagas) as total_cotas')
+            ->groupBy('item_id');
+
+        $exprTotalItem = $hasVagasTotais
+            ? 'COALESCE(i.vagas_totais, x.total_cotas, 0)'
+            : 'COALESCE(x.total_cotas, 0)';
+
+        $colNivelSelect = Schema::hasColumn('concursos_vagas_cargos','nivel') ? 'c.nivel' :
+                          (Schema::hasColumn('concursos_vagas_cargos','nivel_id') ? 'n.nome' : 'NULL');
+
+        $qb = DB::table('concursos_vagas_itens as i')
+            ->join('concursos_vagas_cargos as c', 'c.id', '=', 'i.cargo_id')
+            ->leftJoinSub($subCotas, 'x', 'x.item_id', '=', 'i.id');
+
+        if (Schema::hasColumn('concursos_vagas_cargos','nivel_id')) {
+            $qb->leftJoin('niveis_escolaridade as n', 'n.id', '=', 'c.nivel_id');
+        }
+
+        $linhas = $qb->where('i.concurso_id', $concursoId)
+            ->selectRaw("
+                c.nome as cargo,
+                ".(Schema::hasColumn('concursos_vagas_cargos','codigo') ? 'c.codigo' : 'NULL')." as codigo,
+                {$colNivelSelect} as nivel,
+                SUM({$exprTotalItem}) as vagas
+            ")
+            ->groupBy('c.nome');
+
+        if (Schema::hasColumn('concursos_vagas_cargos','codigo')) {
+            $linhas->groupBy('c.codigo');
+        }
+        if (Schema::hasColumn('concursos_vagas_cargos','nivel_id')) {
+            $linhas->groupBy('n.nome');
+        } elseif (Schema::hasColumn('concursos_vagas_cargos','nivel')) {
+            $linhas->groupBy('c.nivel');
+        }
+
+        return $linhas->orderBy('c.nome')->get();
+    }
+
+    /**
+     * Linhas por localidade (opcional para exibir na view).
+     * Retorna: cargo_nome, local_nome, quantidade (int), cr (0/1).
+     */
+    private function buildVagasLocais(int $concursoId): Collection
+    {
+        if (
+            !Schema::hasTable('concursos_vagas_itens') ||
+            !Schema::hasTable('concursos_vagas_cargos')
+        ) {
+            return collect();
+        }
+
+        $usaLocalString = Schema::hasColumn('concursos_vagas_itens', 'local');
+        $hasVagasTotais = Schema::hasColumn('concursos_vagas_itens', 'vagas_totais');
+        $hasCR          = Schema::hasColumn('concursos_vagas_itens', 'cr');
+
+        $subCotas = DB::table('concursos_vagas_cotas')
+            ->selectRaw('item_id, SUM(vagas) as total_cotas')
+            ->groupBy('item_id');
+
+        $exprQuantidade = $hasVagasTotais
+            ? 'COALESCE(i.vagas_totais, x.total_cotas, 0)'
+            : 'COALESCE(x.total_cotas, 0)';
+
+        $qb = DB::table('concursos_vagas_itens as i')
+            ->join('concursos_vagas_cargos as c', 'c.id', '=', 'i.cargo_id')
+            ->leftJoin('concursos_vagas_localidades as l', 'l.id', '=', 'i.localidade_id')
+            ->leftJoinSub($subCotas, 'x', 'x.item_id', '=', 'i.id')
+            ->where('i.concurso_id', $concursoId);
+
+        $selects = [
+            'c.nome as cargo_nome',
+            DB::raw($usaLocalString ? 'i.local as local_nome' : 'l.nome as local_nome'),
+            DB::raw("{$exprQuantidade} as quantidade"),
+        ];
+        if ($hasCR) $selects[] = 'i.cr';
+
+        return $qb->select($selects)
+            ->orderBy('c.nome')
+            ->orderBy($usaLocalString ? 'i.local' : 'l.nome')
+            ->get();
     }
 
     /**
@@ -488,7 +641,6 @@ class ConcursoController extends Controller
      */
     private function loadSiteConfig(): array
     {
-        // defaults
         $site = [
             'brand'        => 'GestaoConcursos',
             'primary'      => '#0f172a',
@@ -498,7 +650,6 @@ class ConcursoController extends Controller
             'banner_sub'   => 'Inscreva-se, acompanhe publicações e consulte resultados.',
         ];
 
-        // (A) TABELA LARGA: site_settings
         $wideTbl = Schema::hasTable('site_settings') ? 'site_settings' : null;
         if ($wideTbl) {
             try {
@@ -514,12 +665,9 @@ class ConcursoController extends Controller
                         if (!empty($row->{$k})) { $site['banner_url'] = $this->resolvePublicUrl((string)$row->{$k}); break; }
                     }
                 }
-            } catch (\Throwable $e) {
-                // ignora e segue para KV
-            }
+            } catch (\Throwable $e) {}
         }
 
-        // (B) CHAVE-VALOR: settings/configs/configurations (sobrepõe)
         if ($kv = $this->detectKV()) {
             $rows = DB::table($kv['table'])
                 ->whereIn($kv['key'], [
