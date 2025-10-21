@@ -1,4 +1,3 @@
-{{-- resources/views/site/concursos/show.blade.php --}}
 @extends('layouts.site')
 @section('title', $concurso->titulo ?? 'Concurso')
 
@@ -13,6 +12,10 @@
   .hero-img img{ width:100%; border-radius:12px; display:block; }
   .content{ max-width:900px; margin:16px auto 28px; padding:0 16px; }
   .muted{ color:#6b7280; }
+  .stats{ display:flex; gap:12px; flex-wrap:wrap; margin:16px 0 18px; }
+  .stat{ border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; background:#fff; }
+  .stat .label{ font-size:12px; color:#6b7280; margin-bottom:4px; }
+  .stat .value{ font-weight:800; font-size:18px; letter-spacing:-.01em; }
 </style>
 
 <section class="hero-detail">
@@ -22,7 +25,7 @@
       <div class="muted" style="margin-top:4px;">{{ $concurso->cliente_nome }}</div>
     @endif
   </div>
-  @if($concurso->hero_image)
+  @if(!empty($concurso->hero_image))
     <div class="hero-img">
       <img src="{{ $concurso->hero_image }}" alt="Imagem do cliente">
     </div>
@@ -30,6 +33,17 @@
 </section>
 
 <div class="content">
+  {{-- ===== Resumo/Stats ===== --}}
+  <div class="stats" aria-label="Resumo do concurso">
+    <div class="stat">
+      <div class="label">Total de vagas</div>
+      <div class="value">
+        {{ number_format((int)($concurso->total_vagas ?? 0), 0, ',', '.') }}
+      </div>
+    </div>
+  </div>
+
+  {{-- ===== Descrição ===== --}}
   @if(!empty($concurso->descricao))
     <div>{!! nl2br(e($concurso->descricao)) !!}</div>
   @else

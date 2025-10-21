@@ -39,6 +39,7 @@ use App\Http\Controllers\Admin\Config\TipoCondicaoEspecialController;
 use App\Http\Controllers\Admin\Config\NiveisEscolaridadeController;
 use App\Http\Controllers\Admin\Config\TiposVagasEspeciaisController;
 use App\Http\Controllers\Admin\Config\AnexoGrupoController; // <<< ADICIONADO
+use App\Http\Controllers\Admin\Config\SiteSettingsController; // <<< ITEM 3 (menu Site)
 
 /**
  * Controllers (área do candidato)
@@ -102,6 +103,35 @@ if (!is_link(public_path('storage')) || !file_exists(public_path('storage'))) {
     })->where('path', '.*');
 }
 
+// --------------------------------------------------------------------------
+// ROTA ADICIONAL: servir arquivos do disco 'public' via /media/*
+// --------------------------------------------------------------------------
+Route::get('/media/{path}', function (string $path) {
+    $path = ltrim($path, '/');
+    $disk = Storage::disk('public');
+
+    abort_if(!$disk->exists($path), 404);
+
+    $full = $disk->path($path);
+
+    // Detecta MIME com fallback
+    $mime = null;
+    try {
+        $mime = $disk->mimeType($path);
+    } catch (\Throwable $e) {
+        // ignore
+    }
+    if (!$mime && function_exists('mime_content_type')) {
+        $mime = @mime_content_type($full) ?: null;
+    }
+    $mime = $mime ?: 'application/octet-stream';
+
+    return response()->file($full, [
+        'Content-Type'  => $mime,
+        'Cache-Control' => 'public, max-age=604800, immutable', // 7 dias
+    ]);
+})->where('path', '.*')->name('media.public');
+
 // -------------------------
 // Autenticação (Admin)
 // -------------------------
@@ -147,6 +177,20 @@ Route::prefix('admin')
 
         // NOVO: Página "Início"
         Route::get('/inicio', [InicioController::class, 'index'])->name('inicio');
+
+        // ===== ATALHO PARA O MENU "SITE" =====
+        Route::get('/site', [SiteSettingsController::class, 'edit'])->name('site.edit');
+        Route::put('/site', [SiteSettingsController::class, 'update'])->name('site.update');
+        Route::post('/site', [SiteSettingsController::class, 'update'])->name('site.update.post');
+        Route::delete('/site/banner', [SiteSettingsController::class, 'destroyBanner'])->name('site.banner.destroy');
+        // >>> ADICIONADO: remover LOGO (atalho /admin/site)
+        Route::delete('/site/logo', [SiteSettingsController::class, 'destroyLogo'])->name('site.logo.destroy');
+
+        // PROTEÇÃO: se algum submit mandar DELETE /admin/site por engano, não faça nada destrutivo
+        Route::delete('/site', function () {
+            return redirect()->route('admin.site.edit')
+                ->with('ok', 'Nenhuma ação destrutiva executada. Use os botões "Remover banner" ou "Remover logo".');
+        })->name('site.delete.compat');
 
         // Clientes
         Route::resource('clientes', ClientController::class)
@@ -317,6 +361,63 @@ Route::prefix('admin')
             // >>> Reordenar (drag & drop)
             Route::post('grupos-anexos/reordenar', [AnexoGrupoController::class, 'reorder'])
                 ->name('grupos-anexos.reorder');
+
+            // =================================================
+            // ITEM 3 — Menu "Site" (configurações do site)
+            // =================================================
+
+            // GET com fallback/Controller
+            Route::get('site', function (Request $request) {
+                try {
+                    return app(\App\Http\Controllers\Admin\Config\SiteSettingsController::class)->edit($request);
+                } catch (\InvalidArgumentException $e) {
+                    // fallback simples se a view não existir
+                    $csrf   = csrf_token();
+                    $action = route('admin.config.site.update');
+                    $html = <<<HTML
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Configurações do Site (Fallback)</title></head>
+<body>
+  <form method="POST" action="{$action}" enctype="multipart/form-data">
+    <input type="hidden" name="_token" value="{$csrf}">
+    <input type="hidden" name="_method" value="PUT">
+    <div>Nome/Marca: <input type="text" name="brand"></div>
+    <div>Cor primária: <input type="text" name="primary" placeholder="#0f172a"></div>
+    <div>Cor secundária: <input type="text" name="accent" placeholder="#111827"></div>
+    <div>Título: <input type="text" name="banner_title"></div>
+    <div>Subtítulo: <input type="text" name="banner_sub"></div>
+    <div>Banner (upload): <input type="file" name="banner" accept="image/*"></div>
+    <div>Banner (URL): <input type="text" name="banner_url"></div>
+    <button type="submit">Salvar</button>
+  </form>
+
+  <!-- Form de remoção separado (NÃO aninhar forms) -->
+  <form method="POST" action="{$action}/banner">
+    <input type="hidden" name="_token" value="{$csrf}">
+    <input type="hidden" name="_method" value="DELETE">
+    <button type="submit">Remover banner</button>
+  </form>
+</body></html>
+HTML;
+                    return response($html);
+                }
+            })->name('site.edit');
+
+            // Salvar/atualizar
+            Route::put('site', [SiteSettingsController::class, 'update'])->name('site.update');
+            Route::post('site', [SiteSettingsController::class, 'update'])->name('site.update.post');
+
+            // Remover banner (rota correta)
+            Route::delete('site/banner', [SiteSettingsController::class, 'destroyBanner'])->name('site.banner.destroy');
+
+            // >>> ADICIONADO: remover LOGO (menu /admin/config/site)
+            Route::delete('site/logo', [SiteSettingsController::class, 'destroyLogo'])->name('site.logo.destroy');
+
+            // PROTEÇÃO: se algum submit mandar DELETE /admin/config/site por engano, não faça nada destrutivo
+            Route::delete('site', function () {
+                return redirect()->route('admin.config.site.edit')
+                    ->with('ok', 'Nenhuma ação destrutiva executada. Use os botões "Remover banner" ou "Remover logo".');
+            })->name('site.delete.compat');
         });
 
         // ==============================

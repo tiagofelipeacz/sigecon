@@ -836,11 +836,29 @@ class InscritosController extends Controller
             return response()->json(['ok'=>false,'message'=>'CPF inválido. Digite 11 dígitos.'], 422);
         }
 
-        // Se a tela enviar cargo/localidade, checamos duplicidade precisa
+        // Parâmetros opcionais que a tela pode enviar
         $cargoId = (int) $request->input('cargo_id', 0);
         $itemId  = (int) $request->input('item_id', 0);
         $candId  = $request->filled('candidato_id') ? (int)$request->input('candidato_id') : null;
 
+        // ----------- Sugestão de número (não incrementa) -----------
+        $numeroSugerido = null;
+        $numeroSugeridoFmt = null;
+        if (Schema::hasColumn('concursos','sequence_inscricao')) {
+            $seq = (int) ($concurso->sequence_inscricao ?? 0);
+            // Sugere o próximo — o store() fará o incremento real de forma atômica
+            $numeroSugerido = $seq + 1;
+            $numeroSugeridoFmt = str_pad((string)$numeroSugerido, 7, '0', STR_PAD_LEFT);
+        }
+
+        // ----------- Valor da inscrição (snapshot preview) -----------
+        $valorInscricao = $this->resolveValorInscricao(
+            $concurso->id,
+            $cargoId > 0 ? $cargoId : null,
+            $itemId ?: null
+        );
+
+        // ----------- Duplicidade precisa (quando vier cargo/localidade) -----------
         $dupPreciso = false;
         if ($cargoId > 0) {
             $locKey = $itemId; // sua local_key é baseada em item_id
@@ -865,10 +883,13 @@ class InscritosController extends Controller
 
         if ($dupPreciso) {
             return response()->json([
-                'ok'          => true,
-                'exists'      => true,
-                'ja_inscrito' => true,
-                'message'     => 'Este CPF/candidato já possui inscrição ativa neste cargo e localidade.',
+                'ok'                  => true,
+                'exists'              => true,
+                'ja_inscrito'         => true,
+                'message'             => 'Este CPF/candidato já possui inscrição ativa neste cargo e localidade.',
+                'valor_inscricao'     => $valorInscricao,
+                'numero_sugerido'     => $numeroSugerido,
+                'numero_sugerido_fmt' => $numeroSugeridoFmt,
             ]);
         }
 
@@ -882,17 +903,20 @@ class InscritosController extends Controller
         $cand = Candidato::query()->where('cpf', $cpf)->first();
 
         return response()->json([
-            'ok'=>true,
-            'exists'=>(bool)$cand,
-            'ja_inscrito'=>false, // não bloqueia sem cargo/localidade
-            'ja_no_concurso'=>$jaNoConcurso,
-            'candidato_id'=>$cand->id ?? null,
-            'candidato'=>$cand ? [
-                'nome'=>$cand->nome ?? $cand->name ?? null,
-                'email'=>$cand->email ?? null,
-                'telefone'=>$cand->telefone ?? $cand->phone ?? null,
+            'ok'                  => true,
+            'exists'              => (bool)$cand,
+            'ja_inscrito'         => false, // não bloqueia sem cargo/localidade
+            'ja_no_concurso'      => $jaNoConcurso,
+            'candidato_id'        => $cand->id ?? null,
+            'candidato'           => $cand ? [
+                'nome'     => $cand->nome ?? $cand->name ?? null,
+                'email'    => $cand->email ?? null,
+                'telefone' => $cand->telefone ?? $cand->phone ?? null,
             ] : null,
-            'message'=>$cand
+            'valor_inscricao'     => $valorInscricao,
+            'numero_sugerido'     => $numeroSugerido,
+            'numero_sugerido_fmt' => $numeroSugeridoFmt,
+            'message'             => $cand
                 ? ($jaNoConcurso
                     ? 'CPF localizado. Já há inscrições neste concurso, mas você pode prosseguir para outro cargo/localidade.'
                     : 'CPF localizado. Dados do candidato encontrados.')

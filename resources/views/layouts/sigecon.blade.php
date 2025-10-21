@@ -210,7 +210,7 @@
         <a href="{{ url('/admin/concursos') }}">Gerenciar Processos</a>
         <a href="{{ url('/admin/clientes') }}">Clientes</a>
         <a href="{{ url('/admin/candidatos') }}">Candidatos</a>
-        <a href="#">Site</a>
+        <a href="{{ url('/admin/site') }}">Site</a>
        <!--  <a href="#">Publicidade</a>
         <a href="#">Ferramentas</a> -->
 

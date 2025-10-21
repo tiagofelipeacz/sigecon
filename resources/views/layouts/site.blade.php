@@ -1,5 +1,7 @@
 {{-- resources/views/layouts/site.blade.php --}}
 @php
+  use Illuminate\Support\Str;
+
   // Defaults, caso o controller não injete $site
   $site = $site ?? [
     'brand'        => 'GestaoConcursos',
@@ -9,13 +11,44 @@
     'banner_title' => 'Concursos e Processos Seletivos',
     'banner_sub'   => 'Inscreva-se, acompanhe publicações e consulte resultados.',
   ];
+
+  // Logo dinâmica: tenta diversas chaves usadas no painel "Site"
+  $logoCandidate = $site['logo_url']
+                ?? $site['logo_path']
+                ?? $site['logo']
+                ?? $site['site_logo']
+                ?? $site['brand_logo']
+                ?? $site['header_logo']
+                ?? null;
+
+  // Converte caminho/valor salvo em URL pública
+  $resolvePublicUrl = function (?string $p): ?string {
+    if (!$p) return null;
+    $p = trim($p);
+    if ($p === '') return null;
+
+    if (Str::startsWith($p, ['http://','https://','data:image'])) return $p;
+    if (Str::startsWith($p, ['/storage/','storage/'])) return asset(ltrim($p,'/'));
+
+    $norm = ltrim($p,'/');
+    if (Str::startsWith($norm, 'public/')) return asset('storage/'.substr($norm,7));
+
+    if (file_exists(public_path($p)))               return asset($p);
+    if (file_exists(public_path($norm)))            return asset($norm);
+    if (file_exists(public_path('storage/'.$norm))) return asset('storage/'.$norm);
+
+    // último recurso: assume que está no disco "public"
+    return asset('storage/'.$norm);
+  };
+
+  $logoUrl = $resolvePublicUrl($logoCandidate);
 @endphp
 <!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>@yield('title','Site') — {{ $site['brand'] ?? 'GestaoConcursos' }}</title>
+  <title>@yield('title','Site') - {{ $site['brand'] ?? 'GestaoConcursos' }}</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -37,19 +70,21 @@
     .site-container{ min-height:100dvh; display:flex; flex-direction:column; }
     .container{ max-width:1100px; margin:0 auto; padding:0 16px; }
 
-    /* Header público */
-    .site-header{
-      position:sticky; top:0; z-index:30; background:var(--site-primary); color:#fff;
-      border-bottom:1px solid rgba(255,255,255,.1);
-    }
-    .nav{ display:flex; align-items:center; justify-content:space-between; height:64px; }
-    .brand{ display:flex; align-items:center; gap:10px; font-weight:800; letter-spacing:-.02em; }
-    .brand .logo{ width:28px; height:28px; border-radius:6px; background:#1d4ed8; box-shadow:inset 0 0 0 2px rgba(255,255,255,.25); }
-    .menu{ display:flex; align-items:center; gap:14px; }
-    .menu a{ font-size:14px; opacity:.95; padding:6px 8px; border-radius:8px; }
-    .menu a:hover{ background:rgba(255,255,255,.1); }
-    .cta{ background:#fff; color:var(--site-primary); padding:8px 12px; border-radius:10px; font-weight:700; }
-    .cta:hover{ filter:brightness(.98); }
+    /* Header (topo branco com borda) */
+    .site-header{ position:sticky; top:0; z-index:30; background:#fff; border-bottom:1px solid #e5e7eb; }
+    .nav{ display:flex; align-items:center; justify-content:space-between; gap:12px; height:64px; }
+    .brand{ display:flex; align-items:center; gap:10px; font-weight:800; letter-spacing:-.01em; }
+    .logo-img{ height:32px; width:auto; border-radius:6px; }
+    .brand-text{ color:#111827; }
+
+    .menu{ display:flex; align-items:center; gap:10px; }
+    .menu a{ font-size:14px; padding:8px 10px; border-radius:10px; border:1px solid transparent; }
+    .menu a:hover{ background:#f9fafb; border-color:#e5e7eb; }
+
+    .btn{ display:inline-flex; align-items:center; gap:8px; border:1px solid #e5e7eb; background:#fff; padding:8px 12px; border-radius:10px; cursor:pointer; text-decoration:none; color:#111827; }
+    .btn:hover{ background:#f9fafb; }
+    .btn.primary{ background:var(--site-accent); border-color:var(--site-accent); color:#fff; }
+    .btn.primary:hover{ filter:brightness(1.05); }
 
     main{ flex:1 1 auto; }
 
@@ -61,6 +96,8 @@
     .site-footer small{ opacity:.8; }
     @media (max-width: 900px){
       .site-footer .grid{ grid-template-columns:1fr; }
+      .nav{ height:auto; padding:10px 0; }
+      .menu{ flex-wrap:wrap; }
     }
   </style>
 
@@ -69,19 +106,27 @@
 <body>
 <div class="site-container">
 
-  {{-- HEADER (site público) --}}
+  {{-- HEADER --}}
   <header class="site-header">
     <div class="container nav">
       <a href="{{ route('site.concursos.index') }}" class="brand" aria-label="Página inicial">
-        <span class="logo"></span>
-        <span>{{ $site['brand'] ?? 'GestaoConcursos' }}</span>
-      </a>
-      <nav class="menu" aria-label="Menu do site">
-        <a href="{{ route('site.concursos.index') }}">Início</a>
-        <a href="{{ route('site.concursos.index') }}">Concursos</a>
-        @if(Route::has('candidato.login'))
-          <a class="cta" href="{{ route('candidato.login') }}">Área do Candidato</a>
+        @if($logoUrl)
+          <img class="logo-img" src="{{ $logoUrl }}" alt="{{ $site['brand'] ?? 'GestaoConcursos' }}">
         @endif
+        <span class="brand-text">{{ $site['brand'] ?? 'GestaoConcursos' }}</span>
+      </a>
+
+      <nav class="menu" aria-label="Menu do site">
+        {{-- Somente "Início" e "Área do Candidato" conforme pedido --}}
+        <a href="{{ route('site.concursos.index') }}">Início</a>
+
+        @auth('candidato')
+          <a class="btn primary" href="{{ route('candidato.home') }}">Área do Candidato</a>
+        @else
+          @if(Route::has('candidato.login'))
+            <a class="btn primary" href="{{ route('candidato.login') }}">Área do Candidato</a>
+          @endif
+        @endauth
       </nav>
     </div>
   </header>
@@ -96,7 +141,9 @@
       <div class="grid">
         <div>
           <div class="brand" style="font-size:18px;">
-            <span class="logo"></span>
+            @if($logoUrl)
+              <img class="logo-img" src="{{ $logoUrl }}" alt="{{ $site['brand'] ?? 'GestaoConcursos' }}">
+            @endif
             <span>{{ $site['brand'] ?? 'GestaoConcursos' }}</span>
           </div>
           <p class="muted" style="margin:10px 0 0;">
