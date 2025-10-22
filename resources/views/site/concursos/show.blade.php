@@ -81,7 +81,6 @@
   $vagasLocais  = collect($vagas_locais ?? $concurso->vagas_locais  ?? []);
 
   // ===== Fallbacks inteligentes para Vagas =====
-  // 1) Se não veio $vagas_locais, mas $vagas contém itens com localidade, usa $vagas como $vagasLocais
   if ($vagasLocais->isEmpty() && $vagasRaw->count() > 0) {
     $probe = $vagasRaw->first();
     if (isset($probe->local_nome) || isset($probe->local) || isset($probe->localidade) || isset($probe->localidade_id)) {
@@ -89,7 +88,6 @@
     }
   }
 
-  // 2) Gera um resumo por cargo se $vagasRaw estiver vazio mas há localidades
   $vagasResumo = $vagasRaw;
   if ($vagasResumo->isEmpty() && $vagasLocais->isNotEmpty()) {
     $vagasResumo = $vagasLocais->groupBy(function($it){
@@ -104,43 +102,11 @@
       return (object)[
         'cargo'  => $first->cargo_nome ?? $first->cargo ?? $first->nome ?? $first->titulo ?? 'Cargo',
         'vagas'  => $sum,
-        'nivel'  => $first->nivel ?? $first->nivel_escolaridade ?? null,
+        'nivel'  => $first->nivel ?? null,
         'codigo' => $first->codigo ?? null,
       ];
     })->values();
   }
-
-  // 3) Agrupa localidades por cargo para exibição detalhada (public)
-  $cargosLocais = [];
-  foreach ($vagasLocais as $it) {
-    $cid = isset($it->cargo_id) ? (int)$it->cargo_id : null;
-    $chave = $cid ? ('id:'.$cid) : ($it->cargo_nome ?? $it->cargo ?? $it->nome ?? $it->titulo ?? 'Cargo');
-    if (!isset($cargosLocais[$chave])) {
-      $cargosLocais[$chave] = (object)[
-        'cargo_id' => $cid,
-        'cargo'    => $it->cargo_nome ?? $it->cargo ?? $it->nome ?? $it->titulo ?? 'Cargo',
-        'codigo'   => $it->codigo ?? null,
-        'nivel'    => $it->nivel ?? $it->nivel_escolaridade ?? null,
-        'salario'  => $it->salario ?? null,
-        'jornada'  => $it->jornada ?? null,
-        'taxa'     => $it->valor_inscricao ?? $it->taxa ?? null,
-        'itens'    => [],
-        'total'    => 0,
-      ];
-    }
-    $local  = $it->local_nome ?? $it->local ?? $it->localidade ?? (isset($it->localidade_id) ? ('#'.$it->localidade_id) : '-');
-    $qtd    = $it->quantidade ?? $it->qtd_total ?? $it->total ?? $it->vagas ?? $it->qtde ?? $it->qtd ?? null;
-    $isCR   = (isset($it->cr) && ((int)$it->cr === 1 || $it->cr === true));
-    $cargosLocais[$chave]->itens[] = (object)[
-      'local' => $local,
-      'qtd'   => $qtd !== null ? (int)$qtd : null,
-      'cr'    => $isCR,
-    ];
-    if (!$isCR && $qtd !== null) {
-      $cargosLocais[$chave]->total += (int)$qtd;
-    }
-  }
-  $cargosLocais = collect($cargosLocais)->values();
 
   // Link do botão "Inscrição Online"
   if (Route::has('candidato.inscricoes.cargos') && isset($concurso->id)) {
@@ -170,6 +136,78 @@
     return '#';
   };
 
+  // ===== Classificação do anexo (LINK x ARQUIVO e rótulo do tipo) =====
+  $classifyAnexo = function ($ax, string $href) {
+    // 1) Sinal vindo do controller (prioritário)
+    if (($ax->is_pdf ?? false) === true) {
+      return ['file', 'PDF'];
+    }
+
+    $mime = Str::lower((string)($ax->mime ?? $ax->mimetype ?? $ax->content_type ?? ''));
+
+    // 2) Coleta candidatos para extrair a extensão
+    $cands = [];
+    foreach ([
+      'arquivo','path','file','filename','filepath','storage_path',
+      'url','href','download_url','original_name','original','nome_arquivo'
+    ] as $k) {
+      if (!empty($ax->{$k})) $cands[] = (string)$ax->{$k};
+    }
+    if (!empty($href)) $cands[] = $href;
+
+    // se a URL final tiver query ?path=arquivo.ext, usa também
+    $qs = parse_url($href, PHP_URL_QUERY);
+    if ($qs) {
+      parse_str($qs, $q);
+      foreach (['path','file','filename','f'] as $param) {
+        if (!empty($q[$param])) $cands[] = (string)$q[$param];
+      }
+    }
+
+    $ext = '';
+    foreach ($cands as $c) {
+      $pathOnly = parse_url($c, PHP_URL_PATH) ?? $c;
+      $e = Str::lower(pathinfo($pathOnly, PATHINFO_EXTENSION));
+      if ($e) { $ext = $e; break; }
+    }
+
+    // 3) Flags do próprio registro
+    $isExplicitLink = (isset($ax->is_link) && ($ax->is_link === true || (int)$ax->is_link === 1))
+                   || (isset($ax->tipo) && in_array(Str::lower((string)$ax->tipo), ['link','url'], true));
+
+    $hasFileField = false;
+    foreach (['arquivo','path','file','filename','storage_path'] as $k) {
+      if (!empty($ax->{$k})) { $hasFileField = true; break; }
+    }
+
+    // 4) Host/rota interna (não tratar como link externo)
+    $hrefHost = parse_url($href, PHP_URL_HOST);
+    $appHost  = request()->getHost();
+    $isInternal = !$hrefHost || $hrefHost === $appHost
+               || Str::contains($href, ['/admin/concursos', '/media', '/storage']);
+
+    // 5) É PDF?
+    $isPdf = ($ext === 'pdf')
+          || Str::contains($mime, 'pdf')
+          || (isset($ax->tipo) && Str::lower((string)$ax->tipo) === 'pdf');
+    if ($isPdf) return ['file', 'PDF'];
+
+    // 6) Só é LINK quando for marcado, sem campos de arquivo e externo
+    if ($isExplicitLink && !$hasFileField && !$isInternal) {
+      return ['link', 'LINK'];
+    }
+
+    // 7) Rótulos por tipo/extensão (genéricos)
+    if (in_array($ext, ['doc','docx']) || Str::contains($mime, ['msword','word']))  return ['file','DOC'];
+    if (in_array($ext, ['xls','xlsx','csv']) || Str::contains($mime, ['excel','sheet'])) return ['file','XLS'];
+    if (in_array($ext, ['ppt','pptx']))                                           return ['file','PPT'];
+    if (in_array($ext, ['zip','rar','7z']))                                        return ['file','ZIP'];
+    if (in_array($ext, ['jpg','jpeg','png','gif','bmp','webp']) || Str::contains($mime, 'image'))
+                                                                                   return ['file','IMG'];
+
+    return ['file', 'ARQ']; // genérico
+  };
+
   // Informações importantes
   $infoHtml = $concurso->infos_importantes_html
            ?? $concurso->informacoes_html
@@ -181,13 +219,10 @@
            ?? null;
 
   // ===== Inscrição aberta? =====
-  // 1) Se o controller já mandou um booleano, respeitamos:
   $isInscricaoAberta = null;
   foreach (['inscricao_aberta','inscricoes_aberta','inscricoes_abertas'] as $flag) {
     if (isset($concurso->{$flag})) { $isInscricaoAberta = (bool)$concurso->{$flag}; break; }
   }
-
-  // 2) Caso contrário, calculamos somente se recebermos pelo menos uma das datas
   if ($isInscricaoAberta === null) {
     $isInscricaoAberta = false;
     if ($insIniRaw || $insFimRaw) {
@@ -213,7 +248,7 @@
     --c-bg:      #f8fafc;
   }
   .container{ max-width:1100px; margin:0 auto; padding:0 16px; }
-  .page{ padding:18px 0 36px; font-size:15px; } /* Fonte base um pouco menor */
+  .page{ padding:18px 0 36px; font-size:15px; }
 
   /* Topo */
   .capa{
@@ -257,6 +292,7 @@
   .pub-item{ display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid var(--c-border); }
   .pdf-badge{ font-size:11px; font-weight:800; color:#fff; background:#ef4444; border-radius:6px; padding:5px 7px; }
   .link-badge{ font-size:11px; font-weight:800; color:#fff; background:#3b82f6; border-radius:6px; padding:5px 7px; }
+  .file-badge{ font-size:11px; font-weight:800; color:#fff; background:#6b7280; border-radius:6px; padding:5px 7px; } /* genérico */
   .pub-item a{ color:#0f172a; text-decoration:none; font-size:14px; }
   .pub-item .date{ color:var(--c-muted); font-size:11px; margin-left:6px; }
 
@@ -275,14 +311,7 @@
   /* CR badge */
   .cr-badge{ font-size:11px; font-weight:800; color:#fff; background:#6b7280; border-radius:6px; padding:4px 6px; }
 
-  /* Subcards de cargos/localidades */
-  .subcard{ border-top:1px solid var(--c-border); padding:10px 12px; }
-  .cargo-head{ display:flex; gap:12px; flex-wrap:wrap; align-items:baseline; }
-  .cargo-head .name{ font-weight:800; }
-  .cargo-meta{ color:#6b7280; font-size:12px; display:flex; gap:10px; flex-wrap:wrap; }
-  .muted{ color:#6b7280; }
-
-  /* CORREÇÃO: botão "Área do Candidato" (no header) não fica branco no hover) */
+  /* Hover do botão do header */
   .site-header .btn.primary:hover,
   .menu .btn.primary:hover,
   .btn.primary:hover{
@@ -393,43 +422,18 @@
               $tituloAx = $ax->titulo ?? $ax->nome ?? 'Arquivo';
               $dt       = $ax->created_at ?? $ax->data ?? null;
 
-              // ===== DETECÇÃO ROBUSTA DE PDF =====
-              $mime = Str::lower((string)($ax->mime ?? $ax->mimetype ?? ''));
-
-              // candidatos a caminho/arquivo para inspecionar a extensão
-              $candidates = [];
-              foreach (['arquivo','path','file','filename','arquivo_url','file_url','url','href'] as $cand) {
-                if (!empty($ax->{$cand})) $candidates[] = (string)$ax->{$cand};
-              }
-              if (!empty($href)) $candidates[] = $href;
-
-              // se a URL tiver params (ex.: /media?path=storage/edital.pdf), checa também
-              $q = [];
-              $queryStr = parse_url($href, PHP_URL_QUERY);
-              if ($queryStr) {
-                parse_str($queryStr, $q);
-                foreach (['path','file','filename','f'] as $param) {
-                  if (!empty($q[$param])) $candidates[] = (string)$q[$param];
-                }
-              }
-
-              // olha extensão de todos os candidatos
-              $extIsPdf = false;
-              foreach ($candidates as $c) {
-                $pathOnly = parse_url($c, PHP_URL_PATH) ?? $c;
-                $ext = Str::lower(pathinfo($pathOnly, PATHINFO_EXTENSION));
-                if ($ext === 'pdf') { $extIsPdf = true; break; }
-              }
-
-              $isPdf = (Str::contains($mime, 'pdf') || $extIsPdf || (($ax->tipo ?? null) === 'pdf') || (($ax->is_pdf ?? null) === true));
+              [$tipoAx, $labelAx] = $classifyAnexo($ax, $href);
             @endphp
 
             <li class="pub-item">
-              @if($isPdf)
+              @if($labelAx === 'PDF')
                 <span class="pdf-badge" title="Arquivo PDF">PDF</span>
+              @elseif($labelAx === 'LINK')
+                <span class="link-badge" title="Link externo">LINK</span>
               @else
-                <span class="link-badge" title="Link">LINK</span>
+                <span class="file-badge" title="Arquivo">{{ $labelAx }}</span>
               @endif
+
               <a href="{{ $href }}" target="_blank" rel="noopener">{{ $tituloAx }}</a>
               @if($dt)
                 <span class="date">({{ $fmt($dt) }})</span>
@@ -470,85 +474,40 @@
     </div>
   @endif
 
-  {{-- VAGAS (RESUMO POR CARGO) --}}
-  @if($vagasResumo->count() > 0)
+  {{-- VAGAS POR LOCALIDADE (quando existir) --}}
+  @if($vagasLocais->count() > 0)
     <div class="section">
       <h2>Vagas</h2>
       <div class="card">
         <table class="vagas-table">
           <thead>
             <tr>
-              <th>Vaga</th>
-              <th style="width:280px;">Qtde.</th>
+              <th>Cargo</th>
+              <th>Localidade</th>
+              <th style="width:160px;">Qtde.</th>
             </tr>
           </thead>
           <tbody>
-            @foreach($vagasResumo as $v)
+            @foreach($vagasLocais as $it)
               @php
-                $nome  = $v->cargo ?? $v->nome ?? $v->titulo ?? 'Cargo';
-                $qtd   = $v->quantidade ?? $v->qtd ?? $v->qtde ?? $v->total ?? $v->vagas ?? null;
-                $qtdTxt = $v->qtd_text ?? $v->descricao_qtd ?? $v->quantidade_texto ?? null;
+                $cargo = $it->cargo_nome ?? $it->cargo ?? $it->nome ?? $it->titulo ?? 'Cargo';
+                $local = $it->local_nome ?? $it->local ?? $it->localidade ?? (isset($it->localidade_id) ? ('#'.$it->localidade_id) : '-');
+                $qtd   = $it->quantidade ?? $it->qtd_total ?? $it->total ?? $it->vagas ?? $it->qtde ?? $it->qtd ?? null;
+                $isCR  = (isset($it->cr) && ((int)$it->cr === 1 || $it->cr === true));
               @endphp
               <tr>
-                <td>{{ $nome }}</td>
-                <td>{{ $qtdTxt ? $qtdTxt : ($qtd !== null ? $qtd : '-') }}</td>
+                <td>{{ $cargo }}</td>
+                <td>
+                  {{ $local }}
+                  @if($isCR)
+                    <span class="cr-badge" title="Cadastro de Reserva">CR</span>
+                  @endif
+                </td>
+                <td>{{ $qtd !== null ? $qtd : '-' }}</td>
               </tr>
             @endforeach
           </tbody>
         </table>
-      </div>
-    </div>
-  @endif
-
-  {{-- VAGAS POR LOCALIDADE (agrupado por cargo) --}}
-  @if($cargosLocais->count() > 0)
-    <div class="section">
-      <h2>Vagas por Localidade</h2>
-      <div class="card">
-        @foreach($cargosLocais as $cg)
-          <div class="subcard">
-            <div class="cargo-head">
-              <div class="name">{{ $cg->cargo }}</div>
-              <div class="cargo-meta">
-                @if($cg->codigo) <span>Código: {{ $cg->codigo }}</span>@endif
-                @if($cg->nivel)  <span>Nível: {{ $cg->nivel }}</span>@endif
-                @if($cg->jornada) <span>Jornada: {{ $cg->jornada }}</span>@endif
-                @if($cg->salario !== null && $cg->salario !== '')
-                  <span>Salário: R$ {{ number_format((float)$cg->salario, 2, ',', '.') }}</span>
-                @endif
-                @if($cg->taxa !== null && $cg->taxa !== '')
-                  <span>Taxa: R$ {{ number_format((float)$cg->taxa, 2, ',', '.') }}</span>
-                @endif
-              </div>
-            </div>
-
-            <div class="muted" style="margin:6px 0 8px">
-              Total (sem CR): <strong>{{ (int)$cg->total }}</strong>
-            </div>
-
-            <table class="vagas-table">
-              <thead>
-                <tr>
-                  <th>Localidade</th>
-                  <th style="width:160px;">Qtde.</th>
-                </tr>
-              </thead>
-              <tbody>
-                @foreach($cg->itens as $it)
-                  <tr>
-                    <td>
-                      {{ $it->local }}
-                      @if($it->cr)
-                        <span class="cr-badge" title="Cadastro de Reserva">CR</span>
-                      @endif
-                    </td>
-                    <td>{{ $it->qtd !== null ? $it->qtd : '-' }}</td>
-                  </tr>
-                @endforeach
-              </tbody>
-            </table>
-          </div>
-        @endforeach
       </div>
     </div>
   @endif
