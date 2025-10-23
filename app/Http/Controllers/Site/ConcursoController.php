@@ -20,7 +20,7 @@ class ConcursoController extends Controller
     public function index(Request $request)
     {
         $q       = trim((string) $request->get('q', ''));
-        $status  = trim((string) $request->get('status', '')); // '' | 'ativos' | 'inativos' | 'andamento' | 'suspenso' | 'finalizado'
+        $status  = trim((string) $request->get('status', ''));
         $perPage = 12;
 
         $tblConcursos = 'concursos';
@@ -79,7 +79,6 @@ class ConcursoController extends Controller
         // JOIN opcional com clients p/ pegar nome e imagem
         $joinClients = Schema::hasTable($tblClients);
         if ($joinClients) {
-            // Nome do cliente (primeiro campo existente)
             $clienteNomeAdded = false;
             foreach (['cliente','name','razao_social','nome_fantasia','nome'] as $cn) {
                 if ($hasCol($tblClients, $cn)) {
@@ -90,7 +89,6 @@ class ConcursoController extends Controller
             }
             if (!$clienteNomeAdded) $select[] = DB::raw("'' as cliente_nome");
 
-            // Campos possíveis de imagem do cliente (mandamos como alias cl_*)
             foreach (['logo_path','logo','imagem','image','foto','photo','banner_path','banner'] as $imgCol) {
                 if ($hasCol($tblClients, $imgCol)) {
                     $select[] = DB::raw("cl.`{$imgCol}` as cl_{$imgCol}");
@@ -145,8 +143,8 @@ class ConcursoController extends Controller
         $qb->orderByDesc('co.id');
         $concursos = $qb->paginate($perPage)->withQueryString();
 
-        // Pós-processamento: imagem + fallback do total de vagas (usando o mesmo subselect)
-        $subForOne = $this->totalVagasSubquery(); // reutiliza para fallback quando necessário
+        // Pós-processamento
+        $subForOne = $this->totalVagasSubquery();
 
         $concursos->getCollection()->transform(function ($row) use ($subForOne) {
             // imagem
@@ -160,7 +158,7 @@ class ConcursoController extends Controller
             }
             $row->card_image = $this->pickClientImage($clientRow);
 
-            // total de vagas: se vier null, tenta via subselect pontual
+            // total de vagas
             if (!property_exists($row, 'total_vagas') || $row->total_vagas === null) {
                 $row->total_vagas = $this->computeTotalVagas((int)$row->id, $subForOne);
             }
@@ -168,10 +166,10 @@ class ConcursoController extends Controller
             return $row;
         });
 
-        // ====== AGORA BUSCA AS CONFIGS DO SITE (DINÂMICAS) ======
+        // ====== Config do site ======
         $site = $this->loadSiteConfig();
 
-        // Faixa de logos (belt) — até 10 imagens válidas
+        // Logos belt
         $belt = $concursos->getCollection()
             ->pluck('card_image')->filter()->unique()->take(10)->values();
 
@@ -189,7 +187,7 @@ class ConcursoController extends Controller
 
         $select = ['co.id'];
         if ($hasCol($tblConcursos,'titulo'))     $select[] = 'co.titulo';
-        if ($hasCol($tblConcursos,'descricao'))  $select[] = 'co.descricao'; // <- corrigido (sem "desicao")
+        if ($hasCol($tblConcursos,'descricao'))  $select[] = 'co.descricao';
         if ($hasCol($tblConcursos,'ativo'))      $select[] = 'co.ativo';
         if ($hasCol($tblConcursos,'created_at')) $select[] = 'co.created_at';
 
@@ -199,7 +197,7 @@ class ConcursoController extends Controller
             $select[] = DB::raw('co.id as slug');
         }
 
-        // ====== Datas de inscrição / isenção / prova / edital (aliases padronizados) ======
+        // ====== Datas padronizadas ======
         $inscStartCandidates = ['inscricoes_inicio','inicio_inscricao','dt_inicio_inscricao','inscricao_inicio','inscricoes_de','inicio_inscricoes','inscricoes_ini','insc_inicio'];
         $inscEndCandidates   = ['inscricoes_fim','fim_inscricao','dt_fim_inscricao','inscricao_fim','inscricoes_ate','fim_inscricoes','insc_fim'];
         $inscIniCol = null; $inscFimCol = null;
@@ -281,7 +279,7 @@ class ConcursoController extends Controller
         }
         $row->hero_image = $this->pickClientImage($clientRow);
 
-        // ===== Calcula se a inscrição está aberta (booleano consumido pela view) =====
+        // Inscrição aberta?
         $row->inscricao_aberta = $this->calcInscricaoAberta(
             $row->inscricoes_ini ?? null,
             $row->inscricoes_fim ?? null
@@ -289,19 +287,18 @@ class ConcursoController extends Controller
 
         // ===== Blocos dinâmicos =====
         $anexos     = $this->fetchFirstByConcursoId($row->id, ['concursos_anexos','concurso_anexos','concursos_publicacoes','publicacoes','anexos']);
-        // Enriquecer anexos com href + flags is_link/is_pdf/label (funciona mesmo com rota /open)
         $anexos     = $this->enrichAttachments($anexos, (int) $row->id);
 
         $cronograma = $this->fetchFirstByConcursoId($row->id, ['concursos_cronograma','cronogramas','cronograma','concursos_eventos','eventos']);
 
-        // VAGAS: resumo por cargo + por localidade
+        // Vagas
         $vagasResumo  = $this->buildVagasResumo($row->id);
         $vagas        = $vagasResumo->isNotEmpty()
             ? $vagasResumo
             : $this->fetchFirstByConcursoId($row->id, ['concursos_vagas_itens','concursos_vagas','vagas','cargos_itens','vagas_itens','vaga_itens']);
         $vagasLocais  = $this->buildVagasLocais($row->id);
 
-        // Configs do site (dinâmicas)
+        // Config do site
         $site = $this->loadSiteConfig();
         $site['banner_title'] = $site['banner_title'] ?: 'Detalhes do Concurso';
         $site['banner_sub']   = $site['banner_sub']   ?: '';
@@ -311,8 +308,8 @@ class ConcursoController extends Controller
             'site'          => $site,
             'anexos'        => $anexos,
             'cronograma'    => $cronograma,
-            'vagas'         => $vagas,        // resumo por cargo
-            'vagas_locais'  => $vagasLocais,  // por localidade
+            'vagas'         => $vagas,
+            'vagas_locais'  => $vagasLocais,
         ]);
     }
 
@@ -515,7 +512,6 @@ class ConcursoController extends Controller
 
         $hasVagasTotais = Schema::hasColumn('concursos_vagas_itens', 'vagas_totais');
 
-        // soma de cotas por item
         $subCotas = DB::table('concursos_vagas_cotas')
             ->selectRaw('item_id, SUM(vagas) as total_cotas')
             ->groupBy('item_id');
@@ -560,7 +556,6 @@ class ConcursoController extends Controller
 
     /**
      * Linhas por localidade (opcional para exibir na view).
-     * Retorna: cargo_nome, local_nome, quantidade (int), cr (0/1).
      */
     private function buildVagasLocais(int $concursoId): Collection
     {
@@ -604,9 +599,6 @@ class ConcursoController extends Controller
             ->get();
     }
 
-    /**
-     * Detecta uma tabela chave/valor e retorna metadados (tabela, colunas).
-     */
     private function detectKV(): ?array
     {
         foreach (['settings','configs','configurations'] as $t) {
@@ -621,9 +613,6 @@ class ConcursoController extends Controller
         return null;
     }
 
-    /**
-     * Resolve caminho/URL de imagem para uma URL pública acessível.
-     */
     private function resolvePublicUrl(string $pathOrUrl): ?string
     {
         $p = trim($pathOrUrl);
@@ -644,9 +633,6 @@ class ConcursoController extends Controller
         return asset('storage/'.$norm);
     }
 
-    /**
-     * Carrega as configurações públicas do site (tabela larga + chave-valor).
-     */
     private function loadSiteConfig(): array
     {
         $site = [
@@ -700,25 +686,23 @@ class ConcursoController extends Controller
         return $site;
     }
 
-    /* ======================== AUXILIARES PARA ANEXOS ======================== */
+    /* ======================== AUXILIARES PARA ANEXOS (PÚBLICO) ======================== */
 
     /**
      * Enriquecimento: define href, is_link, is_pdf, label e ext para cada anexo.
-     * A detecção não depende da URL final ter extensão (ex.: /open).
+     * A detecção não depende da URL final ter extensão.
      */
     private function enrichAttachments(Collection $rows, int $concursoId): Collection
     {
         return $rows->map(function ($ax) use ($concursoId) {
             $ax = (object) $ax;
 
-            // href final para abrir (mesma lógica que você tinha na Blade)
-            $ax->href = $this->computeAttachmentHref($ax, $concursoId);
-
-            // sinais de arquivo/link
+            // href final priorizando /anexos/{concurso}/{arquivo}
+            $ax->href   = $this->computeAttachmentHref($ax, $concursoId);
             $ax->is_link = $this->detectIsLinkFromRow($ax);
             $ax->is_pdf  = $this->detectIsPdfFromRow($ax);
 
-            // extrai extensão para rótulo
+            // extensão
             $ext = '';
             foreach (['arquivo','path','file','filename','filepath','storage_path','url','href','original_name','original','nome_arquivo'] as $k) {
                 if (!empty($ax->{$k})) {
@@ -729,41 +713,36 @@ class ConcursoController extends Controller
             }
             $ax->ext = $ext ?: null;
 
-            // normaliza label
+            // rótulo
             $mime = strtolower((string)($ax->mime ?? $ax->mimetype ?? $ax->content_type ?? ''));
-            if     ($ax->is_link)                            $ax->label = 'LINK';
-            elseif ($ax->is_pdf || $ext === 'pdf' ||
-                    ($mime !== '' && str_contains($mime,'pdf'))) $ax->label = 'PDF';
-            elseif (in_array($ext, ['doc','docx']) || str_contains($mime,'word')) $ax->label = 'DOC';
+            if     ($ax->is_link)                                                      $ax->label = 'LINK';
+            elseif ($ax->is_pdf || $ext === 'pdf' || ($mime !== '' && str_contains($mime,'pdf'))) $ax->label = 'PDF';
+            elseif (in_array($ext, ['doc','docx']) || str_contains($mime,'word'))      $ax->label = 'DOC';
             elseif (in_array($ext, ['xls','xlsx','csv']) || str_contains($mime,'sheet')) $ax->label = 'XLS';
-            elseif (in_array($ext, ['ppt','pptx'])) $ax->label = 'PPT';
-            elseif (in_array($ext, ['zip','rar','7z'])) $ax->label = 'ZIP';
+            elseif (in_array($ext, ['ppt','pptx']))                                    $ax->label = 'PPT';
+            elseif (in_array($ext, ['zip','rar','7z']))                                $ax->label = 'ZIP';
             elseif (in_array($ext, ['jpg','jpeg','png','gif','bmp','webp']) || str_contains($mime,'image')) $ax->label = 'IMG';
-            else $ax->label = 'ARQ';
+            else                                                                       $ax->label = 'ARQ';
 
             return $ax;
         });
     }
 
-    /** Heurística robusta para detectar PDF mesmo com URL sem extensão (ex.: /open). */
+    /** Heurística robusta para detectar PDF mesmo com URL sem extensão. */
     private function detectIsPdfFromRow(object $ax): bool
     {
-        // 1) Mime/content-type explícito
         $mime = Str::lower(trim((string)($ax->mime ?? $ax->mimetype ?? $ax->content_type ?? '')));
         if ($mime !== '' && Str::contains($mime, 'pdf')) return true;
 
-        // 2) Campo "tipo/ext"
         foreach (['tipo','type','ext','extension','formato'] as $k) {
             $v = Str::lower(trim((string)($ax->{$k} ?? '')));
             if ($v === 'pdf' || $v === '.pdf') return true;
         }
 
-        // 3) Extensão detectável a partir de nomes/paths/urls
         $cands = [];
         foreach ([
             'arquivo','path','file','filename','filepath','storage_path',
-            'url','href','download_url',
-            'original_name','original','nome_arquivo'
+            'url','href','download_url','original_name','original','nome_arquivo'
         ] as $k) {
             if (!empty($ax->{$k})) $cands[] = (string)$ax->{$k};
         }
@@ -773,7 +752,6 @@ class ConcursoController extends Controller
             if ($ext === 'pdf') return true;
         }
 
-        // 4) Verifica no disco público quando houver um caminho compatível
         foreach ($cands as $c) {
             $p = str_replace('\\','/',$c);
             $norm = ltrim($p,'/');
@@ -784,72 +762,115 @@ class ConcursoController extends Controller
                     $m = Str::lower((string) Storage::disk('public')->mimeType($norm));
                     if ($m && Str::contains($m,'pdf')) return true;
                 }
-            } catch (\Throwable $e) {
-                // ignora falhas de leitura do disco
-            }
+            } catch (\Throwable $e) {}
         }
 
         return false;
     }
 
-    /**
-     * Detecta se o registro é um LINK (externo) olhando os campos do próprio item,
-     * sem depender da URL final (que pode ser /open).
-     */
+    /** Detecta se o registro é um LINK externo. */
     private function detectIsLinkFromRow(object $ax): bool
     {
-        // Sinal explícito
-        if (isset($ax->is_link) && ($ax->is_link === true || (int)$ax->is_link === 1)) {
-            return true;
-        }
-        if (isset($ax->tipo) && in_array(Str::lower((string)$ax->tipo), ['link','url'], true)) {
-            return true;
-        }
+        if (isset($ax->is_link) && ($ax->is_link === true || (int)$ax->is_link === 1)) return true;
+        if (isset($ax->tipo) && in_array(Str::lower((string)$ax->tipo), ['link','url'], true)) return true;
 
-        // Tem algum campo de arquivo?
         $hasFileField = false;
         foreach (['arquivo','path','file','filename','filepath','storage_path'] as $k) {
             if (!empty($ax->{$k})) { $hasFileField = true; break; }
         }
-
-        // Caso não haja arquivo e exista URL -> consideramos LINK
         if (!$hasFileField && !empty($ax->url)) return true;
 
-        // Por padrão, não marcamos como link.
         return false;
     }
 
+    /** Monta URL curta: /anexos/{concurso}/{arquivo} (com rota nomeada, se existir). */
+    private function buildAnexosPublicUrl(int $concursoId, string $path): string
+    {
+        $p = str_replace('\\','/',$path);
+        $norm = ltrim($p,'/');
+        if (Str::startsWith($norm,'storage/')) $norm = substr($norm, 8);
+        if (Str::startsWith($norm,'public/'))  $norm = substr($norm, 7);
+
+        $file = basename($norm);
+        if (Route::has('anexos.public')) {
+            return route('anexos.public', ['concurso' => $concursoId, 'arquivo' => $file]);
+        }
+        return url('/anexos/'.$concursoId.'/'.$file);
+    }
+
     /**
-     * Resolve o link final do anexo (href) com várias fontes e fallbacks,
-     * compatível com sua rota admin.concursos.anexos.open.
+     * Resolve o link final do anexo (href) priorizando /anexos/{concurso}/{arquivo}.
      */
     private function computeAttachmentHref(object $ax, int $concursoId): string
     {
-        // 1) URLs diretas
+        // 1) URLs diretas (http/https)
         foreach (['url','arquivo_url','file_url','href'] as $k) {
             if (!empty($ax->{$k})) return (string)$ax->{$k};
         }
 
-        // 2) Caminhos de arquivo -> tenta rota pública ou URL pública
-        foreach (['path','arquivo','file','filepath','storage_path'] as $k) {
+        // 2) Campos de arquivo -> URL curta /anexos/{concurso}/{arquivo}
+        foreach (['path','arquivo','file','filename','filepath','storage_path'] as $k) {
             if (!empty($ax->{$k})) {
-                $path = (string) $ax->{$k};
-                if (Route::has('media.public')) {
-                    return route('media.public', ['path' => $path]);
-                }
-                // fallback: tentativa de URL pública
-                return $this->resolvePublicUrl($path) ?? '#';
+                return $this->buildAnexosPublicUrl($concursoId, (string)$ax->{$k});
             }
         }
 
-        // 3) Fallback para rota /open (admin) se existir
-        if (Route::has('admin.concursos.anexos.open') && isset($ax->id)) {
-            return route('admin.concursos.anexos.open', [
+        // 3) Fallback: rota pública por ID (se existir)
+        if (Route::has('site.concursos.anexos.open') && isset($ax->id)) {
+            return route('site.concursos.anexos.open', [
                 'concurso' => $concursoId,
                 'anexo'    => $ax->id,
             ]);
         }
 
         return '#';
+    }
+
+    /**
+     * Handler PÚBLICO para abrir anexos por ID:
+     * agora redireciona para /anexos/{concurso}/{arquivo} quando for arquivo local;
+     * links externos são redirecionados diretamente.
+     */
+    public function openAnexo(int $concursoId, int $anexoId)
+    {
+        $ax = $this->findAnexo($concursoId, $anexoId);
+        abort_unless($ax, 404);
+
+        // Se for URL externa, redireciona
+        foreach (['url','arquivo_url','file_url','href'] as $k) {
+            $u = (string)($ax->{$k} ?? '');
+            if ($u && Str::startsWith($u, ['http://','https://'])) {
+                return redirect()->away($u);
+            }
+        }
+
+        // Se apontar para arquivo, manda para a URL curta /anexos/{concurso}/{arquivo}
+        foreach (['path','arquivo','file','filename','filepath','storage_path'] as $k) {
+            $p = (string)($ax->{$k} ?? '');
+            if ($p !== '') {
+                return redirect()->to($this->buildAnexosPublicUrl($concursoId, $p));
+            }
+        }
+
+        abort(404);
+    }
+
+    /** Alias compatível, caso sua rota nomeada aponte para openAttachment(). */
+    public function openAttachment($concurso, $anexo)
+    {
+        return $this->openAnexo((int) $concurso, (int) $anexo);
+    }
+
+    /** Busca anexo por ID em tabelas candidatas. */
+    private function findAnexo(int $concursoId, int $anexoId): ?object
+    {
+        $tables = ['concursos_anexos','concurso_anexos','concursos_publicacoes','publicacoes','anexos'];
+        foreach ($tables as $t) {
+            if (Schema::hasTable($t) && Schema::hasColumn($t,'id') && Schema::hasColumn($t,'concurso_id')) {
+                $row = DB::table($t)->where('concurso_id',$concursoId)->where('id',$anexoId)->first();
+                if ($row) return $row;
+            }
+        }
+        return null;
     }
 }

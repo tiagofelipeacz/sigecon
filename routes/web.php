@@ -88,6 +88,16 @@ Route::resourceVerbs([
 // -------------------------
 Route::redirect('/', '/concursos')->name('site.home');
 Route::get('/concursos', [PublicConcursoController::class, 'index'])->name('site.concursos.index');
+
+/**
+ * >>> NOVO: rota pública para abrir anexos do concurso
+ * Ex.: GET /concursos/6/anexos/3/open
+ */
+Route::get('/concursos/{concurso}/anexos/{anexo}/open', [PublicConcursoController::class, 'openAttachment'])
+    ->whereNumber('concurso')
+    ->whereNumber('anexo')
+    ->name('site.concursos.anexos.open');
+
 Route::get('/concursos/{concurso}', [PublicConcursoController::class, 'show'])->name('site.concursos.show');
 
 // --------------------------------------------------------------------------
@@ -275,7 +285,8 @@ Route::prefix('admin')
                 Route::patch('anexos/{anexo}/toggle-ativo', [ConcursoAnexoController::class, 'toggleAtivo'])->name('anexos.toggle-ativo');
                 Route::patch('anexos/{anexo}/toggle-restrito', [ConcursoAnexoController::class, 'toggleRestrito'])->name('anexos.toggle-restrito');
                 Route::patch('anexos/{anexo}/toggle', [ConcursoAnexoController::class, 'toggleAtivo'])->name('anexos.toggle');
-                // >>> ABRIR anexo (stream/redirect) — incluído
+
+                // >>> ABRIR anexo (stream/redirect) — ADMIN (protegida)
                 Route::get('anexos/{anexo}/open', [ConcursoAnexoController::class, 'open'])->name('anexos.open');
 
                 // Cidades de Prova
