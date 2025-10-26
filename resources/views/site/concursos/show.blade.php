@@ -119,33 +119,64 @@
     $inscricaoUrl = url('/candidato/login');
   }
 
-  // Resolver link de anexo
-  $anexoLink = function ($ax) use ($resolvePublicUrl, $concurso) {
-    foreach (['url','arquivo_url','file_url','href'] as $k) {
-      if (!empty($ax->{$k})) return (string)$ax->{$k};
-    }
-    foreach (['path','arquivo','file','filepath','storage_path'] as $k) {
-      if (!empty($ax->{$k})) return $resolvePublicUrl($ax->{$k});
-    }
-    if (!empty($ax->path))    return route('media.public', ['path' => $ax->path]);
-    if (!empty($ax->arquivo)) return route('media.public', ['path' => $ax->arquivo]);
+  /**
+   * === Resolver link público do anexo ===
+   * Ordem:
+   * 1) href vindo do controller;
+   * 2) LINK externo (http/https);
+   * 3) ARQUIVO local => rota curta /anexos/{concurso}/{filename};
+   * 4) Sem fallback por ID.
+   */
+  $anexoLink = function ($ax) use ($concurso, $resolvePublicUrl) {
 
-    if (Route::has('admin.concursos.anexos.open') && isset($concurso->id, $ax->id)) {
-      return route('admin.concursos.anexos.open', ['concurso' => $concurso->id, 'anexo' => $ax->id]);
+    // 1) href vindo do controller
+    $fromController = (string)($ax->href ?? '');
+    if ($fromController !== '') {
+      return $fromController;
     }
+
+    // 2) Se for link explícito (externo)
+    $tipo   = Str::lower((string)($ax->tipo ?? ''));
+    $urlRaw = null;
+    foreach (['url','link_url','href','arquivo_url','file_url'] as $k) {
+      if (!empty($ax->{$k})) { $urlRaw = (string)$ax->{$k}; break; }
+    }
+    if (($urlRaw && Str::startsWith($urlRaw, ['http://','https://'])) || in_array($tipo, ['link','url'], true)) {
+      return $urlRaw ?: '#';
+    }
+
+    // 3) Arquivo local => gerar rota curta por filename
+    $rawPath = null;
+    foreach (['arquivo_path','arquivo','path','file','filepath','storage_path','original_name','nome_arquivo'] as $k) {
+      if (!empty($ax->{$k})) { $rawPath = (string)$ax->{$k}; break; }
+    }
+    if ($rawPath) {
+      $p = str_replace('\\','/',$rawPath);
+      $p = ltrim($p,'/');
+      foreach (['storage/','public/','app/public/'] as $prefix) {
+        if (Str::startsWith($p, $prefix)) { $p = substr($p, strlen($prefix)); break; }
+      }
+      $filename = rawurlencode(basename($p));
+      if ($filename && isset($concurso->id) && Route::has('site.anexos.file')) {
+        return route('site.anexos.file', ['concurso' => $concurso->id, 'arquivo' => $filename]);
+      }
+      return $resolvePublicUrl($rawPath) ?? '#';
+    }
+
     return '#';
   };
 
   // ===== Classificação do anexo (LINK x ARQUIVO e rótulo do tipo) =====
   $classifyAnexo = function ($ax, string $href) {
-    // 1) Sinal vindo do controller (prioritário)
     if (($ax->is_pdf ?? false) === true) {
       return ['file', 'PDF'];
+    }
+    if (($ax->is_link ?? false) === true && !Str::contains($href, ['/anexos/','/media/','/storage/','/concursos/'])) {
+      return ['link', 'LINK'];
     }
 
     $mime = Str::lower((string)($ax->mime ?? $ax->mimetype ?? $ax->content_type ?? ''));
 
-    // 2) Coleta candidatos para extrair a extensão
     $cands = [];
     foreach ([
       'arquivo','path','file','filename','filepath','storage_path',
@@ -155,7 +186,6 @@
     }
     if (!empty($href)) $cands[] = $href;
 
-    // se a URL final tiver query ?path=arquivo.ext, usa também
     $qs = parse_url($href, PHP_URL_QUERY);
     if ($qs) {
       parse_str($qs, $q);
@@ -171,7 +201,9 @@
       if ($e) { $ext = $e; break; }
     }
 
-    // 3) Flags do próprio registro
+    $isPdf = ($ext === 'pdf') || Str::contains($mime, 'pdf') || (isset($ax->tipo) && Str::lower((string)$ax->tipo) === 'pdf');
+    if ($isPdf) return ['file', 'PDF'];
+
     $isExplicitLink = (isset($ax->is_link) && ($ax->is_link === true || (int)$ax->is_link === 1))
                    || (isset($ax->tipo) && in_array(Str::lower((string)$ax->tipo), ['link','url'], true));
 
@@ -180,32 +212,22 @@
       if (!empty($ax->{$k})) { $hasFileField = true; break; }
     }
 
-    // 4) Host/rota interna (não tratar como link externo)
     $hrefHost = parse_url($href, PHP_URL_HOST);
     $appHost  = request()->getHost();
     $isInternal = !$hrefHost || $hrefHost === $appHost
-               || Str::contains($href, ['/admin/concursos', '/media', '/storage']);
+               || Str::contains($href, ['/anexos/', '/media', '/storage', '/concursos/']);
 
-    // 5) É PDF?
-    $isPdf = ($ext === 'pdf')
-          || Str::contains($mime, 'pdf')
-          || (isset($ax->tipo) && Str::lower((string)$ax->tipo) === 'pdf');
-    if ($isPdf) return ['file', 'PDF'];
-
-    // 6) Só é LINK quando for marcado, sem campos de arquivo e externo
     if ($isExplicitLink && !$hasFileField && !$isInternal) {
       return ['link', 'LINK'];
     }
 
-    // 7) Rótulos por tipo/extensão (genéricos)
-    if (in_array($ext, ['doc','docx']) || Str::contains($mime, ['msword','word']))  return ['file','DOC'];
-    if (in_array($ext, ['xls','xlsx','csv']) || Str::contains($mime, ['excel','sheet'])) return ['file','XLS'];
-    if (in_array($ext, ['ppt','pptx']))                                           return ['file','PPT'];
-    if (in_array($ext, ['zip','rar','7z']))                                        return ['file','ZIP'];
-    if (in_array($ext, ['jpg','jpeg','png','gif','bmp','webp']) || Str::contains($mime, 'image'))
-                                                                                   return ['file','IMG'];
+    if (in_array($ext, ['doc','docx']) || Str::contains($mime, ['msword','word']))                 return ['file','DOC'];
+    if (in_array($ext, ['xls','xlsx','csv']) || Str::contains($mime, ['excel','sheet']))           return ['file','XLS'];
+    if (in_array($ext, ['ppt','pptx']))                                                             return ['file','PPT'];
+    if (in_array($ext, ['zip','rar','7z']))                                                         return ['file','ZIP'];
+    if (in_array($ext, ['jpg','jpeg','png','gif','bmp','webp']) || Str::contains($mime, 'image'))  return ['file','IMG'];
 
-    return ['file', 'ARQ']; // genérico
+    return ['file', 'ARQ'];
   };
 
   // Informações importantes
@@ -236,6 +258,33 @@
         elseif (!$ini && $fim) $isInscricaoAberta = $now->lessThanOrEqualTo($fim);
       } catch (\Throwable $e) { $isInscricaoAberta = false; }
     }
+  }
+
+  /* ======= Publicações: agrupa por 'grupo' e insere separador de texto ======= */
+  $grouped = $anexos->groupBy(function($ax){
+    $g = trim((string)($ax->grupo ?? ''));
+    return $g !== '' ? $g : 'Outros'; // <-- ajuste aqui se quiser outro nome
+  });
+
+  // Ordena grupos por nome natural (padrão)
+  $groupNames = $grouped->keys()->sort(SORT_NATURAL|SORT_FLAG_CASE)->values();
+
+  // Flatten: [separator, item, item, separator, item...]
+  $pubFlat = collect();
+  foreach ($groupNames as $gn) {
+    $pubFlat->push((object)['_sep' => true, 'grupo' => $gn]);
+    $items = $grouped->get($gn);
+
+    // ordem amigável: posicao/ordem asc, depois data desc
+    $items = $items->sortBy(function($it){
+      $pos = (int)($it->posicao ?? $it->ordem ?? 0);
+      $dt  = $it->created_at ?? $it->data ?? null;
+      $ts  = 0;
+      try { if ($dt) $ts = Carbon::parse($dt)->timestamp; } catch (\Throwable $e) {}
+      return sprintf('%08d-%010d', $pos, 9999999999 - $ts);
+    });
+
+    foreach ($items as $it) $pubFlat->push($it);
   }
 @endphp
 
@@ -290,9 +339,10 @@
   .pub-head{ background:var(--c-primary); color:#fff; padding:10px 12px; font-weight:800; font-size:14px; }
   .pub-list{ list-style:none; margin:0; padding:0; }
   .pub-item{ display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid var(--c-border); }
+  .pub-sep{ padding:12px 12px 6px; font-weight:800; color:#0f172a; opacity:.9; }
   .pdf-badge{ font-size:11px; font-weight:800; color:#fff; background:#ef4444; border-radius:6px; padding:5px 7px; }
   .link-badge{ font-size:11px; font-weight:800; color:#fff; background:#3b82f6; border-radius:6px; padding:5px 7px; }
-  .file-badge{ font-size:11px; font-weight:800; color:#fff; background:#6b7280; border-radius:6px; padding:5px 7px; } /* genérico */
+  .file-badge{ font-size:11px; font-weight:800; color:#fff; background:#6b7280; border-radius:6px; padding:5px 7px; }
   .pub-item a{ color:#0f172a; text-decoration:none; font-size:14px; }
   .pub-item .date{ color:var(--c-muted); font-size:11px; margin-left:6px; }
 
@@ -308,10 +358,8 @@
   .info-block ul{ margin:8px 0 0 18px; }
   .info-block li{ margin:6px 0; }
 
-  /* CR badge */
   .cr-badge{ font-size:11px; font-weight:800; color:#fff; background:#6b7280; border-radius:6px; padding:4px 6px; }
 
-  /* Hover do botão do header */
   .site-header .btn.primary:hover,
   .menu .btn.primary:hover,
   .btn.primary:hover{
@@ -410,35 +458,38 @@
   @endif
 
   {{-- PUBLICAÇÕES --}}
-  @if($anexos->count() > 0)
+  @if($pubFlat->count() > 0)
     <div class="section">
       <h2>Publicações</h2>
       <div class="card">
-        <div class="pub-head">Edital de Abertura</div>
+        <div class="pub-head">Arquivos e Links</div>
         <ul class="pub-list">
-          @foreach($anexos as $ax)
-            @php
-              $href     = $anexoLink($ax);
-              $tituloAx = $ax->titulo ?? $ax->nome ?? 'Arquivo';
-              $dt       = $ax->created_at ?? $ax->data ?? null;
+          @foreach($pubFlat as $ax)
+            @if(!empty($ax->_sep))
+              <li class="pub-sep">{{ $ax->grupo }}</li>
+            @else
+              @php
+                $href     = $anexoLink($ax);
+                $tituloAx = $ax->titulo ?? $ax->nome ?? 'Arquivo';
+                $dt       = $ax->created_at ?? $ax->data ?? null;
+                [$tipoAx, $labelAx] = $classifyAnexo($ax, $href);
+              @endphp
 
-              [$tipoAx, $labelAx] = $classifyAnexo($ax, $href);
-            @endphp
+              <li class="pub-item">
+                @if($labelAx === 'PDF')
+                  <span class="pdf-badge" title="Arquivo PDF">PDF</span>
+                @elseif($labelAx === 'LINK')
+                  <span class="link-badge" title="Link externo">LINK</span>
+                @else
+                  <span class="file-badge" title="Arquivo">{{ $labelAx }}</span>
+                @endif
 
-            <li class="pub-item">
-              @if($labelAx === 'PDF')
-                <span class="pdf-badge" title="Arquivo PDF">PDF</span>
-              @elseif($labelAx === 'LINK')
-                <span class="link-badge" title="Link externo">LINK</span>
-              @else
-                <span class="file-badge" title="Arquivo">{{ $labelAx }}</span>
-              @endif
-
-              <a href="{{ $href }}" target="_blank" rel="noopener">{{ $tituloAx }}</a>
-              @if($dt)
-                <span class="date">({{ $fmt($dt) }})</span>
-              @endif
-            </li>
+                <a href="{{ $href }}" target="_blank" rel="noopener noreferrer">{{ $tituloAx }}</a>
+                @if($dt)
+                  <span class="date">({{ $fmt($dt) }})</span>
+                @endif
+              </li>
+            @endif
           @endforeach
         </ul>
       </div>

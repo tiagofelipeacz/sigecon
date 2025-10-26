@@ -90,7 +90,17 @@ Route::redirect('/', '/concursos')->name('site.home');
 Route::get('/concursos', [PublicConcursoController::class, 'index'])->name('site.concursos.index');
 
 /**
- * >>> NOVO: rota pública para abrir anexos do concurso
+ * PÚBLICO: abrir anexos por NOME DE ARQUIVO
+ * -> usa o controller para validar restrição e servir tanto disk local quanto public
+ * Ex.: GET /anexos/6/arquivo.pdf
+ */
+Route::get('/anexos/{concurso}/{arquivo}', [ConcursoAnexoController::class, 'openPublicByFilename'])
+    ->whereNumber('concurso')
+    ->where('arquivo', '.*')
+    ->name('site.anexos.file');
+
+/**
+ * Rota pública para abrir anexo por ID do anexo
  * Ex.: GET /concursos/6/anexos/3/open
  */
 Route::get('/concursos/{concurso}/anexos/{anexo}/open', [PublicConcursoController::class, 'openAttachment'])

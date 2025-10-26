@@ -698,13 +698,13 @@ class ConcursoController extends Controller
             $ax = (object) $ax;
 
             // href final priorizando /anexos/{concurso}/{arquivo}
-            $ax->href   = $this->computeAttachmentHref($ax, $concursoId);
+            $ax->href    = $this->computeAttachmentHref($ax, $concursoId);
             $ax->is_link = $this->detectIsLinkFromRow($ax);
             $ax->is_pdf  = $this->detectIsPdfFromRow($ax);
 
             // extensão
             $ext = '';
-            foreach (['arquivo','path','file','filename','filepath','storage_path','url','href','original_name','original','nome_arquivo'] as $k) {
+            foreach (['arquivo_path','arquivo','path','file','filename','filepath','storage_path','url','href','link','original_name','original','nome_arquivo'] as $k) {
                 if (!empty($ax->{$k})) {
                     $p = parse_url((string)$ax->{$k}, PHP_URL_PATH) ?? (string)$ax->{$k};
                     $e = strtolower(pathinfo($p, PATHINFO_EXTENSION));
@@ -741,8 +741,8 @@ class ConcursoController extends Controller
 
         $cands = [];
         foreach ([
-            'arquivo','path','file','filename','filepath','storage_path',
-            'url','href','download_url','original_name','original','nome_arquivo'
+            'arquivo_path','arquivo','path','file','filename','filepath','storage_path',
+            'url','href','link','download_url','original_name','original','nome_arquivo'
         ] as $k) {
             if (!empty($ax->{$k})) $cands[] = (string)$ax->{$k};
         }
@@ -775,15 +775,15 @@ class ConcursoController extends Controller
         if (isset($ax->tipo) && in_array(Str::lower((string)$ax->tipo), ['link','url'], true)) return true;
 
         $hasFileField = false;
-        foreach (['arquivo','path','file','filename','filepath','storage_path'] as $k) {
+        foreach (['arquivo_path','arquivo','path','file','filename','filepath','storage_path'] as $k) {
             if (!empty($ax->{$k})) { $hasFileField = true; break; }
         }
-        if (!$hasFileField && !empty($ax->url)) return true;
+        if (!$hasFileField && (!empty($ax->url) || !empty($ax->link) || !empty($ax->link_url))) return true;
 
         return false;
     }
 
-    /** Monta URL curta: /anexos/{concurso}/{arquivo} (com rota nomeada, se existir). */
+    /** Monta URL curta: /anexos/{concurso}/{arquivo} (com rota nomeada correta). */
     private function buildAnexosPublicUrl(int $concursoId, string $path): string
     {
         $p = str_replace('\\','/',$path);
@@ -791,53 +791,53 @@ class ConcursoController extends Controller
         if (Str::startsWith($norm,'storage/')) $norm = substr($norm, 8);
         if (Str::startsWith($norm,'public/'))  $norm = substr($norm, 7);
 
-        $file = basename($norm);
-        if (Route::has('anexos.public')) {
-            return route('anexos.public', ['concurso' => $concursoId, 'arquivo' => $file]);
+        $file = rawurlencode(basename($norm));
+
+        // usa a rota registrada em web.php
+        if (Route::has('site.anexos.file')) {
+            return route('site.anexos.file', ['concurso' => $concursoId, 'arquivo' => $file]);
         }
+
+        // fallback absoluto
         return url('/anexos/'.$concursoId.'/'.$file);
     }
 
     /**
      * Resolve o link final do anexo (href) priorizando /anexos/{concurso}/{arquivo}.
+     * >>> Sem fallback por ID para evitar /concursos/{id}/anexos/{anexo}/open
      */
     private function computeAttachmentHref(object $ax, int $concursoId): string
     {
-        // 1) URLs diretas (http/https)
-        foreach (['url','arquivo_url','file_url','href'] as $k) {
-            if (!empty($ax->{$k})) return (string)$ax->{$k};
-        }
-
-        // 2) Campos de arquivo -> URL curta /anexos/{concurso}/{arquivo}
-        foreach (['path','arquivo','file','filename','filepath','storage_path'] as $k) {
-            if (!empty($ax->{$k})) {
-                return $this->buildAnexosPublicUrl($concursoId, (string)$ax->{$k});
+        // 1) URLs diretas (http/https) — agora considera link_url e link
+        foreach (['url','link_url','link','arquivo_url','file_url','href'] as $k) {
+            $val = (string)($ax->{$k} ?? '');
+            if ($val && Str::startsWith($val, ['http://','https://'])) {
+                return $val;
             }
         }
 
-        // 3) Fallback: rota pública por ID (se existir)
-        if (Route::has('site.concursos.anexos.open') && isset($ax->id)) {
-            return route('site.concursos.anexos.open', [
-                'concurso' => $concursoId,
-                'anexo'    => $ax->id,
-            ]);
+        // 2) Campos de arquivo -> URL curta /anexos/{concurso}/{arquivo}
+        foreach (['arquivo_path','path','arquivo','file','filename','filepath','storage_path','original_name','nome_arquivo'] as $k) {
+            $v = (string)($ax->{$k} ?? '');
+            if ($v !== '') {
+                return $this->buildAnexosPublicUrl($concursoId, $v);
+            }
         }
 
+        // 3) Nada encontrado -> sem link (evita cair em /concursos/.../open)
         return '#';
     }
 
     /**
-     * Handler PÚBLICO para abrir anexos por ID:
-     * agora redireciona para /anexos/{concurso}/{arquivo} quando for arquivo local;
-     * links externos são redirecionados diretamente.
+     * Handler PÚBLICO legacy por ID (mantido por compatibilidade — não usado pelo site).
      */
     public function openAnexo(int $concursoId, int $anexoId)
     {
         $ax = $this->findAnexo($concursoId, $anexoId);
         abort_unless($ax, 404);
 
-        // Se for URL externa, redireciona
-        foreach (['url','arquivo_url','file_url','href'] as $k) {
+        // Se for URL externa, redireciona (inclui link_url/link)
+        foreach (['url','link_url','link','arquivo_url','file_url','href'] as $k) {
             $u = (string)($ax->{$k} ?? '');
             if ($u && Str::startsWith($u, ['http://','https://'])) {
                 return redirect()->away($u);
@@ -845,7 +845,7 @@ class ConcursoController extends Controller
         }
 
         // Se apontar para arquivo, manda para a URL curta /anexos/{concurso}/{arquivo}
-        foreach (['path','arquivo','file','filename','filepath','storage_path'] as $k) {
+        foreach (['arquivo_path','path','arquivo','file','filename','filepath','storage_path','original_name','nome_arquivo'] as $k) {
             $p = (string)($ax->{$k} ?? '');
             if ($p !== '') {
                 return redirect()->to($this->buildAnexosPublicUrl($concursoId, $p));

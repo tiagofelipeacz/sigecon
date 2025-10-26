@@ -44,7 +44,7 @@ class ConcursoController extends Controller
     // --------------------------
     public function index(Request $request)
     {
-        $q = trim((string) $request->input('q', ''));
+        $q      = trim((string) $request->input('q', ''));
         $status = (string) $request->input('status', 'todos');
 
         // explicitamente sem itens soft-deletados (mesmo sendo default)
@@ -128,9 +128,11 @@ class ConcursoController extends Controller
             'oculto'          => 'required|boolean',
         ]);
 
+        // Coerções de checkbox
         $data['ativo']  = $request->boolean('ativo');
         $data['oculto'] = $request->boolean('oculto');
 
+        // Configs base (guardadas no JSON, se houver)
         $configs = (array) ($data['configs'] ?? []);
         if (!empty($data['edital_num'])) {
             $configs['numero_edital'] = $data['edital_num'];
@@ -142,6 +144,7 @@ class ConcursoController extends Controller
         $concursosTable = (new Concurso)->getTable();
         $concursosCols  = Schema::getColumnListing($concursosTable);
 
+        // cliente_id → variantes
         if (in_array('cliente_id', $concursosCols, true)) {
             // ok
         } elseif (in_array('client_id', $concursosCols, true)) {
@@ -152,6 +155,7 @@ class ConcursoController extends Controller
             $data['clients_id'] = $data['cliente_id']; unset($data['cliente_id']);
         }
 
+        // oculto / situacao → mapeamentos tolerantes
         if (!in_array('oculto', $concursosCols, true) && array_key_exists('oculto', $data) && in_array('ocultar_site', $concursosCols, true)) {
             $data['ocultar_site'] = $data['oculto']; unset($data['oculto']);
         }
@@ -159,8 +163,10 @@ class ConcursoController extends Controller
             $data['status'] = $data['situacao']; unset($data['situacao']);
         }
 
+        // Mantém só colunas existentes
         $payload = array_intersect_key($data, array_flip($concursosCols));
 
+        // Defaults
         if (in_array('sequence_inscricao', $concursosCols, true) && !array_key_exists('sequence_inscricao', $payload)) {
             $payload['sequence_inscricao'] = 1;
         }
@@ -393,7 +399,7 @@ class ConcursoController extends Controller
         });
 
         // ====== SALVAR TIPOS DE CONDIÇÕES ESPECIAIS (pivot) ======
-        $conds = array_values(array_unique(array_map('intval', (array) $request->input('condicoes_especiais', []))));
+        $conds  = array_values(array_unique(array_map('intval', (array) $request->input('condicoes_especiais', []))));
         $flagCE = (int) data_get($configsNew, 'flag_condicoesespeciais', 0);
         if ($flagCE !== 1) {
             $conds = [];
@@ -405,7 +411,7 @@ class ConcursoController extends Controller
                 ->delete();
 
             if (!empty($conds)) {
-                $now = now();
+                $now  = now();
                 $rows = array_map(fn($id) => [
                     'concurso_id'               => $concurso->id,
                     'tipo_condicao_especial_id' => $id,
@@ -441,7 +447,7 @@ class ConcursoController extends Controller
 
     public function destroy(Concurso $concurso)
     {
-        // agora faz soft delete (coluna deleted_at)
+        // agora faz soft delete (coluna deleted_at no Model)
         $concurso->delete();
         return redirect()->route('admin.concursos.index')->with('success', 'Concurso excluído.');
     }

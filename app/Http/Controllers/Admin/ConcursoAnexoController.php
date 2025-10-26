@@ -94,7 +94,7 @@ class ConcursoAnexoController extends Controller
         $data = $this->validated($req);
         $data['concurso_id'] = $concurso->id;
 
-        // AJUSTE: se indeterminado, zera AMBAS as datas
+        // Se indeterminado, zera AMBAS as datas
         if (!empty($data['tempo_indeterminado'])) {
             $data['visivel_de']  = null;
             $data['visivel_ate'] = null;
@@ -103,8 +103,8 @@ class ConcursoAnexoController extends Controller
         // Upload de arquivo quando tipo = arquivo
         if (($data['tipo'] ?? '') === 'arquivo' && $req->hasFile('arquivo')) {
             $stored = $req->file('arquivo')->store("anexos/{$concurso->id}", 'public');
-            $data['arquivo_path'] = $stored;  // será mapeado para a coluna correta abaixo
-            $data['link_url']     = null;     // idem
+            $data['arquivo_path'] = $stored;
+            $data['link_url']     = null;
         }
 
         // Mapeia/limpa colunas conforme o schema real
@@ -145,7 +145,7 @@ class ConcursoAnexoController extends Controller
 
         $data = $this->validated($req);
 
-        // AJUSTE: se indeterminado, zera AMBAS as datas
+        // Se indeterminado, zera AMBAS as datas
         if (!empty($data['tempo_indeterminado'])) {
             $data['visivel_de']  = null;
             $data['visivel_ate'] = null;
@@ -158,7 +158,7 @@ class ConcursoAnexoController extends Controller
                 Storage::disk('public')->delete($oldPath);
             }
             $stored = $req->file('arquivo')->store("anexos/{$concurso->id}", 'public');
-            $data['arquivo_path'] = $stored;  // será mapeado para a coluna correta abaixo
+            $data['arquivo_path'] = $stored;
             $data['link_url']     = null;
         }
 
@@ -168,7 +168,7 @@ class ConcursoAnexoController extends Controller
             if ($oldPath) {
                 Storage::disk('public')->delete($oldPath);
             }
-            $data['arquivo_path'] = null; // mapeado abaixo
+            $data['arquivo_path'] = null;
         }
 
         // Mapeia/limpa colunas conforme o schema real
@@ -264,9 +264,9 @@ class ConcursoAnexoController extends Controller
     }
 
     /**
-     * ABRE o anexo (stream inline) independente de symlink.
+     * ABRE o anexo (stream inline) no ADMIN (protegido).
      * - Se for do tipo LINK, redireciona para a URL.
-     * - Se for arquivo, tenta servir via disk('public') e fallbacks locais.
+     * - Se for arquivo, tenta servir via discos e fallbacks locais.
      */
     public function open(Concurso $concurso, int $anexoId)
     {
@@ -286,58 +286,85 @@ class ConcursoAnexoController extends Controller
             abort(404);
         }
 
-        // Descobrir caminho salvo no banco
-        $rawPath = $anexo->arquivo_path ?? $anexo->arquivo ?? $anexo->path ?? null;
-        if (!$rawPath) {
-            abort(404);
-        }
-
-        // Normaliza
-        $p = str_replace('\\', '/', (string)$rawPath);
-        $p = ltrim($p, '/');
-
-        // se veio "storage/..." ou "public/..." ou "app/public/...", recorta para ficar relativo ao disk('public')
-        if (stripos($p, 'storage/') === 0)     { $p = substr($p, strlen('storage/')); }
-        if (stripos($p, 'public/') === 0)      { $p = substr($p, strlen('public/')); }
-        if (stripos($p, 'app/public/') === 0)  { $p = substr($p, strlen('app/public/')); }
-
-        // 1) disk('public')
-        $disk = Storage::disk('public');
-        if ($disk->exists($p)) {
-            $absolute = $disk->path($p);
-            $name     = basename($absolute);
-            // inline (abre no navegador)
-            return response()->file($absolute, [
-                'Cache-Control'      => 'private, max-age=0',
-                'Content-Disposition'=> 'inline; filename="'.$name.'"',
-            ]);
-        }
-
-        // 2) Caminho público absoluto informado no banco?
-        $publicAbs = public_path($rawPath);
-        if (file_exists($publicAbs)) {
-            $name = basename($publicAbs);
-            return response()->file($publicAbs, [
-                'Cache-Control'      => 'private, max-age=0',
-                'Content-Disposition'=> 'inline; filename="'.$name.'"',
-            ]);
-        }
-
-        // 3) Fallback para public/storage/...
-        $publicStorage = public_path('storage/'.ltrim($p, '/'));
-        if (file_exists($publicStorage)) {
-            $name = basename($publicStorage);
-            return response()->file($publicStorage, [
-                'Cache-Control'      => 'private, max-age=0',
-                'Content-Disposition'=> 'inline; filename="'.$name.'"',
-            ]);
-        }
-
-        abort(404);
+        // Admin ignora "restrito" porque já está autenticado; apenas streama
+        return $this->streamAnexoFile($anexo);
     }
 
     /**
-     * Validação dos campos do formulário.
+     * PÚBLICO: abre por NOME DE ARQUIVO (rota curta /anexos/{concurso}/{arquivo})
+     * - Bloqueia anexos restritos/privados, inativos e fora da janela pública.
+     * - Se houver link externo, redireciona (se público).
+     * - Stream inline do arquivo físico.
+     */
+    public function openPublicByFilename(int $concurso, string $arquivo)
+    {
+        // Normaliza para evitar path traversal e aceita urlencoded
+        $arquivoOriginal = $arquivo;
+        $arquivo  = str_replace(['..', '\\'], ['', '/'], $arquivo);
+        $arquivo  = ltrim($arquivo, '/');
+        $filename = basename($arquivo);
+        $filenameDecoded = basename(rawurldecode($arquivoOriginal));
+
+        // ============================
+        // Localiza o registro por concurso + filename (somente em colunas que EXISTEM)
+        // ============================
+        $table = 'concursos_anexos';
+        $fileColumnsAll = [
+            'arquivo_path','arquivo','path','file','filename','filepath',
+            'storage_path','original_name','nome_arquivo',
+        ];
+        $fileColumns = array_values(array_filter($fileColumnsAll, fn($c) => Schema::hasColumn($table, $c)));
+
+        $anexo = null;
+        if (!empty($fileColumns)) {
+            $anexo = ConcursoAnexo::query()
+                ->where('concurso_id', $concurso)
+                ->where(function ($q) use ($fileColumns, $filename, $filenameDecoded) {
+                    $needles = array_unique(array_filter([$filename, $filenameDecoded]));
+                    $q->where(function($w) use ($fileColumns, $needles) {
+                        foreach ($fileColumns as $col) {
+                            foreach ($needles as $n) {
+                                // usa LIKE terminando com o nome do arquivo
+                                $w->orWhere($col, 'like', '%'.$n);
+                            }
+                        }
+                    });
+                })
+                ->when(Schema::hasColumn($table, 'deleted_at'), fn($q) => $q->whereNull($table.'.deleted_at'))
+                ->first();
+        }
+
+        if ($anexo) {
+            // Verificação de visibilidade pública
+            if (!$this->isPubliclyVisible($anexo)) {
+                abort(403, 'Este anexo não está disponível publicamente.');
+            }
+
+            // Link externo?
+            $tipo = (string)($anexo->tipo ?? '');
+            if ($tipo === 'link') {
+                $link = $anexo->link_url ?? $anexo->url ?? $anexo->link ?? null;
+                if ($link) {
+                    return redirect()->away($link);
+                }
+                abort(404, 'Link inválido.');
+            }
+
+            // Stream
+            return $this->streamAnexoFile($anexo, $filenameDecoded ?: $filename, $concurso, $arquivo);
+        }
+
+        // Sem registro no banco: tenta caminhos padrão por concurso/arquivo
+        $resp = $this->tryStreamByStandardPaths($concurso, $filenameDecoded ?: $filename);
+        if ($resp) {
+            return $resp;
+        }
+
+        abort(404, 'Arquivo não encontrado.');
+    }
+
+    /**
+     * Faz a validação dos campos do formulário.
      */
     private function validated(Request $req): array
     {
@@ -348,25 +375,25 @@ class ConcursoAnexoController extends Controller
             'grupo'                => ['nullable', 'string', 'max:190'],
             'posicao'              => ['nullable', 'integer', 'min:0'],
 
-            // AJUSTE: aceitar apenas 0/1 para habilitar required_if
+            // aceitar apenas 0/1 para usar required_if corretamente
             'tempo_indeterminado'  => ['nullable', 'in:0,1'],
 
             'publicado_em'         => ['nullable', 'date'],
 
-            // AJUSTE: datas obrigatórias quando NÃO indeterminado
+            // datas obrigatórias quando NÃO indeterminado
             'visivel_de'           => ['nullable', 'date', 'required_if:tempo_indeterminado,0'],
             'visivel_ate'          => ['nullable', 'date', 'after_or_equal:visivel_de', 'required_if:tempo_indeterminado,0'],
 
-            'ativo'                => ['nullable'], // tratado abaixo
-            'restrito'             => ['nullable'], // tratado abaixo (ou mapeado para "privado")
+            'ativo'                => ['nullable'],
+            'restrito'             => ['nullable'],
             'restrito_cargos'      => ['nullable', 'array'],
             'restrito_cargos.*'    => ['integer'],
             'link_url'             => ['nullable', 'url', 'max:1000'],
             'arquivo'              => ['nullable', 'file', 'max:15360'], // 15MB
         ]);
 
-        // Coerções simples (checkbox/select vinda como string)
-        // Defaults: tempo indeterminado = true, ativo = true, restrito = false
+        // Coerções simples (checkbox/select como string)
+        // Defaults
         $data['tempo_indeterminado'] = filter_var($req->input('tempo_indeterminado', true), FILTER_VALIDATE_BOOLEAN);
         $data['ativo']               = filter_var($req->input('ativo', true), FILTER_VALIDATE_BOOLEAN);
         $data['restrito']            = filter_var($req->input('restrito', false), FILTER_VALIDATE_BOOLEAN);
@@ -374,9 +401,9 @@ class ConcursoAnexoController extends Controller
 
         // Se tipo = link, zera arquivo; se tipo = arquivo, zera link
         if (($data['tipo'] ?? '') === 'link') {
-            $data['arquivo_path'] = null; // mapeado depois
+            $data['arquivo_path'] = null;
         } else {
-            $data['link_url'] = null;     // mapeado depois
+            $data['link_url'] = null;
         }
 
         // Normaliza array de cargos restritos vazio
@@ -519,12 +546,184 @@ class ConcursoAnexoController extends Controller
 
     /**
      * Carrega lista de cargos (se houver model/relacionamento).
-     * Aqui retornamos array vazio para evitar erro quando não existir.
      */
     private function carregarCargos(Concurso $concurso): array
     {
-        // Se houver implementação de cargos, substitua por um select real:
-        // return Cargo::where('concurso_id', $concurso->id)->orderBy('nome')->get()->toArray();
+        // Implementação real se tiver cargos
         return [];
+    }
+
+    // =====================================================================
+    // Helpers internos de stream/arquivo (compartilhados por admin e público)
+    // =====================================================================
+
+    /**
+     * Verifica se um anexo está público (não restrito/privado, ativo, dentro da janela).
+     */
+    private function isPubliclyVisible(ConcursoAnexo $anexo): bool
+    {
+        // restrito/privado
+        $restritoAttr = $anexo->restrito ?? $anexo->privado ?? null;
+        $isRestrito = is_bool($restritoAttr)
+            ? $restritoAttr
+            : ((string)$restritoAttr === '1' || strtolower((string)$restritoAttr) === 'true');
+        if ($isRestrito) return false;
+
+        // ativo
+        if (Schema::hasColumn('concursos_anexos', 'ativo')) {
+            if (!((int)($anexo->ativo ?? 0) === 1)) return false;
+        }
+
+        // janela de visibilidade
+        $hasIndet = Schema::hasColumn('concursos_anexos', 'tempo_indeterminado');
+        $indet = $hasIndet ? (bool)$anexo->tempo_indeterminado : true;
+
+        if (!$indet) {
+            $de  = Schema::hasColumn('concursos_anexos', 'visivel_de')  ? ($anexo->visivel_de  ?? null) : null;
+            $ate = Schema::hasColumn('concursos_anexos', 'visivel_ate') ? ($anexo->visivel_ate ?? null) : null;
+            $now = now();
+
+            if ($de && $now->lt($de))  return false;
+            if ($ate && $now->gt($ate)) return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Streama um anexo por seu registro (resolve caminho físico e cabeçalhos).
+     */
+    private function streamAnexoFile(ConcursoAnexo $anexo, ?string $forceFilename = null, ?int $concursoId = null, ?string $arquivo = null)
+    {
+        // 1) Tenta via caminho salvo no banco
+        $rawPath = $anexo->arquivo_path ?? $anexo->arquivo ?? $anexo->path ?? null;
+        if ($rawPath) {
+            $absolute = $this->resolveAbsolutePath($rawPath);
+            if ($absolute && is_file($absolute)) {
+                return $this->respondInlineFile($absolute, $forceFilename);
+            }
+        }
+
+        // 2) Se não encontrou, tenta padrões por /anexos/{concurso}/{arquivo}
+        if ($concursoId !== null && $arquivo !== null) {
+            $resp = $this->tryStreamByStandardPaths($concursoId, $arquivo, $forceFilename);
+            if ($resp) return $resp;
+        }
+
+        // 3) Último recurso: tenta pelo nome do arquivo do caminho salvo
+        if ($rawPath) {
+            $filename = basename(str_replace('\\', '/', $rawPath));
+            if ($filename && $concursoId !== null) {
+                $resp = $this->tryStreamByStandardPaths($concursoId, $filename, $forceFilename);
+                if ($resp) return $resp;
+            }
+        }
+
+        abort(404, 'Arquivo não encontrado.');
+    }
+
+    /**
+     * Tenta streamar pelos caminhos padrão:
+     * - storage/app/anexos/{concurso}/{arquivo} (disk local)
+     * - storage/app/public/anexos/{concurso}/{arquivo} (disk public)
+     */
+    private function tryStreamByStandardPaths(int $concursoId, string $arquivo, ?string $forceFilename = null)
+    {
+        // trabalha com o nome “como veio” e também decodificado
+        $cands = array_unique(array_filter([$arquivo, rawurldecode($arquivo)]));
+
+        $diskLocal  = Storage::disk();         // storage/app
+        $diskPublic = Storage::disk('public'); // storage/app/public
+
+        foreach ($cands as $name) {
+            $name = ltrim(str_replace('\\', '/', $name), '/');
+
+            $localRel  = "anexos/{$concursoId}/{$name}";
+            $publicRel = "anexos/{$concursoId}/{$name}";
+
+            if ($diskLocal->exists($localRel)) {
+                return $this->respondInlineFile($diskLocal->path($localRel), $forceFilename);
+            }
+            if ($diskPublic->exists($publicRel)) {
+                return $this->respondInlineFile($diskPublic->path($publicRel), $forceFilename);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve um caminho absoluto a partir de um valor salvo no banco (suporta variações).
+     */
+    private function resolveAbsolutePath(string $rawPath): ?string
+    {
+        $raw = $rawPath;
+        $p = str_replace('\\', '/', $rawPath);
+        $p = ltrim($p, '/');
+
+        // Caminho absoluto? (Linux/Mac) ou (Windows "C:\")
+        $isAbsUnix = DIRECTORY_SEPARATOR === '/' && str_starts_with($raw, '/');
+        $isAbsWin  = preg_match('/^[A-Za-z]\:\\\\/', $raw) === 1;
+        if ($isAbsUnix || $isAbsWin) {
+            return is_file($raw) ? $raw : null;
+        }
+
+        // Normaliza prefixes comuns
+        foreach (['storage/', 'public/', 'app/public/'] as $prefix) {
+            if (stripos($p, $prefix) === 0) {
+                $p = substr($p, strlen($prefix));
+            }
+        }
+
+        // Tenta no disco 'public'
+        $diskPublic = Storage::disk('public');
+        if ($diskPublic->exists($p)) {
+            return $diskPublic->path($p);
+        }
+
+        // Tenta no disco 'local'
+        $diskLocal = Storage::disk();
+        if ($diskLocal->exists($p)) {
+            return $diskLocal->path($p);
+        }
+
+        // Tenta em public_path()
+        $publicAbs = public_path($raw);
+        if (is_file($publicAbs)) {
+            return $publicAbs;
+        }
+
+        // Tenta em public/storage/...
+        $publicStorage = public_path('storage/'.ltrim($p, '/'));
+        if (is_file($publicStorage)) {
+            return $publicStorage;
+        }
+
+        return null;
+    }
+
+    /**
+     * Responde o arquivo inline com MIME e cabeçalhos adequados.
+     */
+    private function respondInlineFile(string $absolutePath, ?string $forceFilename = null)
+    {
+        $name = $forceFilename ?: basename($absolutePath);
+
+        // Descobre MIME com fallbacks
+        $mime = 'application/octet-stream';
+        try {
+            if (function_exists('mime_content_type')) {
+                $mime = mime_content_type($absolutePath) ?: $mime;
+            }
+        } catch (\Throwable $e) {
+            // ignora
+        }
+
+        return response()->file($absolutePath, [
+            'Content-Type'           => $mime,
+            'Content-Disposition'    => 'inline; filename="'.$name.'"',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control'          => 'public, max-age=604800, immutable', // 7 dias
+        ]);
     }
 }
