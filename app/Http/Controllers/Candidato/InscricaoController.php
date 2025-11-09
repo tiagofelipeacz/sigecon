@@ -36,7 +36,7 @@ class InscricaoController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        // IDs únicos de concursos (edital_id) e cargos
+        // IDs únicos de concursos (edital_id via accessor concurso_id) e cargos
         $concursoIds = $inscricoes->pluck('concurso_id')->unique()->filter()->values();
         $cargoIds    = $inscricoes->pluck('cargo_id')->unique()->filter()->values();
 
@@ -67,7 +67,8 @@ class InscricaoController extends Controller
         }
 
         // Agrupa inscrições por concurso (edital) para exibir blocos separados na tela
-        $inscricoesPorConcurso = $inscricoes->groupBy('concurso_id'); // accessor -> edital_id
+        // OBS: "concurso_id" aqui é um accessor no model que devolve "edital_id"
+        $inscricoesPorConcurso = $inscricoes->groupBy('concurso_id');
 
         return view('site.candidato.inscricoes.index', compact(
             'inscricoes',
@@ -77,6 +78,9 @@ class InscricaoController extends Controller
         ));
     }
 
+    /**
+     * Formulário "Nova inscrição"
+     */
     public function create()
     {
         // Lista concursos abertos (inscrições dentro do período e online)
@@ -93,6 +97,9 @@ class InscricaoController extends Controller
         return view('site.candidato.inscricoes.create', compact('concursos'));
     }
 
+    /**
+     * Retorna via JSON os cargos de um concurso (para o select dinâmico)
+     */
     public function cargos($concursoId)
     {
         $cargos = DB::table('concursos_vagas_cargos')
@@ -103,6 +110,9 @@ class InscricaoController extends Controller
         return response()->json($cargos);
     }
 
+    /**
+     * Retorna via JSON as localidades (itens) de um cargo dentro de um concurso
+     */
     public function localidades($concursoId, $cargoId)
     {
         // itens que combinam cargo+localidade
@@ -117,18 +127,29 @@ class InscricaoController extends Controller
         return response()->json($itens);
     }
 
+    /**
+     * Salva uma nova inscrição (tabela antiga "inscricoes")
+     * Contempla: cidade de prova, condições especiais, modalidade, isenção, pagamento.
+     */
     public function store(Request $request)
     {
         /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
 
+        // --------- VALIDAÇÃO ---------
         $data = $request->validate([
-            'concurso_id' => ['required', 'integer'], // id na tabela "concursos"
-            'cargo_id'    => ['required', 'integer'],
-            'item_id'     => ['nullable', 'integer'],
+            'concurso_id'         => ['required', 'integer'], // id na tabela "concursos"
+            'cargo_id'            => ['required', 'integer'],
+            'item_id'             => ['nullable', 'integer'],
+
+            // NOVOS CAMPOS
+            'modalidade'          => ['required', 'string', 'max:20'],   // ampla, pcd, negro...
+            'condicoes_especiais' => ['nullable', 'string', 'max:5000'], // texto livre
+            'solicitou_isencao'   => ['nullable', 'boolean'],            // checkbox
+            'forma_pagamento'     => ['nullable', 'string', 'max:50'],   // boleto, pix, etc
         ]);
 
-        // Pega info do concurso/cargo/item para validar período e vínculos
+        // --------- DADOS DO CONCURSO ---------
         $concurso = DB::table('concursos')->where('id', $data['concurso_id'])->first();
         abort_unless($concurso, 404);
 
@@ -140,14 +161,17 @@ class InscricaoController extends Controller
             ]);
         }
 
-        // Cargo (tabela nova de cargos por concurso)
+        // --------- CARGO ---------
         $cargo = DB::table('concursos_vagas_cargos')
             ->where('id', $data['cargo_id'])
             ->where('concurso_id', $concurso->id)
             ->first();
         abort_unless($cargo, 404);
 
+        // --------- ITEM / LOCALIDADE (CIDADE DE PROVA) ---------
         $item = null;
+        $cidadeProva = null;
+
         if (!empty($data['item_id'])) {
             $item = DB::table('concursos_vagas_itens')
                 ->where('id', $data['item_id'])
@@ -155,9 +179,17 @@ class InscricaoController extends Controller
                 ->where('cargo_id', $cargo->id)
                 ->first();
             abort_unless($item, 404);
+
+            if (!empty($item->localidade_id)) {
+                $localidade = DB::table('concursos_vagas_localidades')
+                    ->where('id', $item->localidade_id)
+                    ->first();
+
+                $cidadeProva = $localidade->nome ?? null;
+            }
         }
 
-        // Impede duplicidade: um candidato por concurso (edital)
+        // --------- CHECA SE JÁ TEM INSCRIÇÃO NESSE CONCURSO ---------
         $ja = CandidatoInscricao::where(function ($q) use ($user) {
                 $q->where('candidato_id', $user->id);
                 if (!empty($user->cpf)) {
@@ -173,11 +205,20 @@ class InscricaoController extends Controller
                 ->withErrors(['general' => 'Você já possui inscrição neste concurso.']);
         }
 
-        // Número da inscrição (campo "numero" da tabela inscricoes)
+        // --------- NÚMERO DA INSCRIÇÃO ---------
         $maxNumero  = CandidatoInscricao::max('numero');
         $nextNumero = $maxNumero ? ($maxNumero + 1) : 1000001;
 
-        // Cria a inscrição na TABELA ANTIGA "inscricoes"
+        // --------- CAMPOS NOVOS: MODALIDADE / ISENÇÃO / PAGAMENTO ---------
+        $modalidade        = strtolower($data['modalidade']);          // salva em minúsculo
+        $solicitouIsencao  = !empty($data['solicitou_isencao']);       // checkbox
+        $formaPagamento    = $data['forma_pagamento'] ?? null;
+
+        // regra simples: se solicitou isenção, pagamento_status = 'isencao_solicitada'
+        // senão, 'pendente' até efetuar pagamento
+        $pagamentoStatus = $solicitouIsencao ? 'isencao_solicitada' : 'pendente';
+
+        // --------- CRIA A INSCRIÇÃO NA TABELA "inscricoes" ---------
         $insc = CandidatoInscricao::create([
             'edital_id'      => $concurso->id,
             'cargo_id'       => $cargo->id,
@@ -186,16 +227,32 @@ class InscricaoController extends Controller
             'candidato_id'   => $user->id,
             'cpf'            => $user->cpf,
             'documento'      => null,
-            'cidade'         => null,
+
+            // CIDADE DE PROVA
+            'cidade'         => $cidadeProva,
+
             'nome_inscricao' => $user->nome,
             'nome_candidato' => $user->nome,
             'nascimento'     => $user->data_nascimento,
-            'modalidade'     => 'ampla',
+
+            // MODALIDADE
+            'modalidade'     => $modalidade,
+
+            // STATUS GERAL DA INSCRIÇÃO
             'status'         => 'confirmada',
+
+            // NUMERAÇÃO
             'numero'         => $nextNumero,
+
             'pessoa_key'     => 'C#' . str_pad((string) $user->id, 20, '0', STR_PAD_LEFT),
             'local_key'      => 0,
             'ativo'          => 1,
+
+            // NOVOS CAMPOS
+            'condicoes_especiais' => $data['condicoes_especiais'] ?? null,
+            'solicitou_isencao'   => $solicitouIsencao,
+            'forma_pagamento'     => $formaPagamento,
+            'pagamento_status'    => $pagamentoStatus,
         ]);
 
         return redirect()
@@ -203,6 +260,9 @@ class InscricaoController extends Controller
             ->with('success', 'Inscrição realizada com sucesso.');
     }
 
+    /**
+     * Tela de detalhes da inscrição
+     */
     public function show($id)
     {
         /** @var \App\Models\Candidato $user */
@@ -237,11 +297,15 @@ class InscricaoController extends Controller
             }
         }
 
+        // Localidade: derivada do item_id (não há coluna localidade_id na tabela inscricoes)
         $localidade = null;
-        if ($insc->localidade_id ?? null) {
-            $localidade = DB::table('concursos_vagas_localidades')
-                ->where('id', $insc->localidade_id)
-                ->first();
+        if ($insc->item_id) {
+            $item = DB::table('concursos_vagas_itens')->where('id', $insc->item_id)->first();
+            if ($item && $item->localidade_id) {
+                $localidade = DB::table('concursos_vagas_localidades')
+                    ->where('id', $item->localidade_id)
+                    ->first();
+            }
         }
 
         return view('site.candidato.inscricoes.show', compact(
@@ -253,6 +317,9 @@ class InscricaoController extends Controller
         ));
     }
 
+    /**
+     * Comprovante em PDF / HTML
+     */
     public function comprovante($id)
     {
         /** @var \App\Models\Candidato $user */
@@ -285,11 +352,15 @@ class InscricaoController extends Controller
             }
         }
 
+        // Localidade: derivada do item_id
         $localidade = null;
-        if ($insc->localidade_id ?? null) {
-            $localidade = DB::table('concursos_vagas_localidades')
-                ->where('id', $insc->localidade_id)
-                ->first();
+        if ($insc->item_id) {
+            $item = DB::table('concursos_vagas_itens')->where('id', $insc->item_id)->first();
+            if ($item && $item->localidade_id) {
+                $localidade = DB::table('concursos_vagas_localidades')
+                    ->where('id', $item->localidade_id)
+                    ->first();
+            }
         }
 
         // Se dompdf estiver instalado, gera PDF; senão retorna HTML "imprimível"
@@ -298,7 +369,7 @@ class InscricaoController extends Controller
                 'site.candidato.inscricoes.comprovante_pdf',
                 compact('insc', 'concurso', 'cargo', 'localidade', 'user')
             );
-            return $pdf->download('comprovante_' . $insc->numero . '.pdf');
+            return $pdf->download('comprovante_' . ($insc->numero ?? $insc->id) . '.pdf');
         }
 
         // Fallback: renderiza HTML imprimível
