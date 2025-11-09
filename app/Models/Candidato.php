@@ -13,6 +13,11 @@ class Candidato extends Authenticatable implements MustVerifyEmailContract
 {
     use HasFactory, Notifiable, MustVerifyEmail, SoftDeletes;
 
+    /**
+     * Guard usado na autenticação (config/auth.php -> guards.candidato).
+     */
+    protected $guard = 'candidato';
+
     protected $table = 'candidatos';
 
     protected $fillable = [
@@ -40,7 +45,9 @@ class Candidato extends Authenticatable implements MustVerifyEmailContract
     ];
 
     /**
-     * Autenticação pelo CPF.
+     * Por padrão, a autenticação deste model usa o CPF como "identificador".
+     * Isso NÃO impede de fazermos login também por e-mail, pois no controller
+     * estamos montando o array de credenciais manualmente (email OU cpf).
      */
     public function getAuthIdentifierName()
     {
@@ -52,12 +59,23 @@ class Candidato extends Authenticatable implements MustVerifyEmailContract
      */
     public function setCpfAttribute($value)
     {
-        $digits = preg_replace('/\D+/', '', (string)$value ?? '');
+        $digits = preg_replace('/\D+/', '', (string)($value ?? ''));
         $this->attributes['cpf'] = $digits !== '' ? $digits : null;
     }
 
     /**
-     * Notificação de reset de senha.
+     * (Opcional) normaliza email para minúsculo.
+     */
+    public function setEmailAttribute($value)
+    {
+        $this->attributes['email'] = $value ? mb_strtolower(trim($value)) : null;
+    }
+
+    /**
+     * Notificação de reset de senha (fluxo padrão do Laravel).
+     * No fluxo que criamos para o candidato (CPF + data nasc + email),
+     * não estamos usando tokens, mas este método pode continuar aqui
+     * sem problema.
      */
     public function sendPasswordResetNotification($token)
     {

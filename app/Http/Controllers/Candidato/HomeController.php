@@ -8,6 +8,7 @@ class HomeController extends Controller
 {
     public function index()
     {
-        return view('candidato.home');
+        // Usa o mesmo layout "site" das telas de login/cadastro
+        return view('site.candidato.home');
     }
 }

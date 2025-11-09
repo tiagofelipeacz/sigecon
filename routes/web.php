@@ -51,6 +51,7 @@ use App\Http\Controllers\Candidato\EmailVerificationController as CandidatoEmail
 use App\Http\Controllers\Candidato\PerfilController as CandidatoPerfilController;
 use App\Http\Controllers\Candidato\DocumentoController as CandidatoDocumentoController;
 use App\Http\Controllers\Candidato\InscricaoController as CandidatoInscricaoController;
+use App\Http\Controllers\Candidato\RecursoController as CandidatoRecursoController; // <<< NOVO
 
 // --------------------------------------------------------------------------
 // Web Routes
@@ -466,6 +467,11 @@ Route::prefix('candidato')->name('candidato.')->group(function () {
     // Login/Logout (público)
     Route::get('/login', [CandidatoAuthController::class, 'showLoginForm'])->name('login');
     Route::post('/login', [CandidatoAuthController::class, 'login'])->name('login.post');
+
+    // NOVO: Checagem de CPF (etapa 1 do login via AJAX)
+    Route::post('/login/check-cpf', [CandidatoAuthController::class, 'checkCpf'])
+        ->name('login.checkCpf');
+
     Route::post('/logout', [CandidatoAuthController::class, 'logout'])->name('logout');
 
     // Cadastro (guest:candidato)
@@ -514,5 +520,8 @@ Route::prefix('candidato')->name('candidato.')->group(function () {
         Route::post('/inscricoes', [CandidatoInscricaoController::class, 'store'])->name('inscricoes.store');
         Route::get('/inscricoes/{id}', [CandidatoInscricaoController::class, 'show'])->name('inscricoes.show');
         Route::get('/inscricoes/{id}/comprovante', [CandidatoInscricaoController::class, 'comprovante'])->name('inscricoes.comprovante');
+
+        // Recursos (novo menu da home)
+        Route::get('/recursos', [CandidatoRecursoController::class, 'index'])->name('recursos.index');
     });
 });

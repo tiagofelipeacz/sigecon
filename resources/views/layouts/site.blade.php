@@ -55,6 +55,9 @@
                 ?? null;
 
   $logoUrl = $resolvePublicUrl($logoCandidate);
+
+  /** @var \App\Models\Candidato|null $candidatoLogado */
+  $candidatoLogado = auth('candidato')->user();
 @endphp
 <!doctype html>
 <html lang="pt-BR">
@@ -98,10 +101,45 @@
     .menu a{ font-size:14px; padding:10px 12px; border-radius:10px; border:1px solid transparent; }
     .menu a:hover{ background:#f9fafb; border-color:#e5e7eb; }
 
-    .btn{ display:inline-flex; align-items:center; gap:8px; border:1px solid #e5e7eb; background:#fff; padding:10px 14px; border-radius:10px; cursor:pointer; text-decoration:none; color:#111827; }
+    .btn{
+      display:inline-flex; align-items:center; gap:8px;
+      border:1px solid #e5e7eb; background:#fff;
+      padding:10px 14px; border-radius:10px;
+      cursor:pointer; text-decoration:none; color:#111827;
+      font-size:14px;
+    }
     .btn:hover{ background:#f9fafb; }
     .btn.primary{ background:var(--site-accent); border-color:var(--site-accent); color:#fff; }
     .btn.primary:hover{ filter:brightness(1.05); }
+
+    /* Área de usuário/logado no header */
+    .menu-user{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+    .user-pill{
+      max-width:190px;
+      font-size:13px;
+      padding:6px 10px;
+      border-radius:999px;
+      background:#f3f4f6;
+      border:1px solid #e5e7eb;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .btn-logout{
+      padding:7px 11px;
+      font-size:13px;
+      border-radius:999px;
+      background:#fee2e2;
+      border:1px solid #fecaca;
+      color:#991b1b;
+    }
+    .btn-logout:hover{
+      background:#fecaca;
+    }
 
     main{ flex:1 1 auto; }
 
@@ -112,11 +150,13 @@
     .site-footer hr{ border:0; height:1px; background:rgba(255,255,255,.18); margin:6px 0 14px; }
     .site-footer small{ opacity:.8; }
     .logo-footer{ max-height: 60px; width:auto; display:block; } /* um pouco menor no rodapé */
+
     @media (max-width: 900px){
       .site-footer .grid{ grid-template-columns:1fr; }
       .nav{ min-height: 90px; padding:8px 0; } /* header reduzido em telas menores */
       .logo-img{ max-height: 72px; }
-      .menu{ flex-wrap:wrap; }
+      .menu{ flex-wrap:wrap; justify-content:flex-end; }
+      .menu-user{ flex-wrap:wrap; justify-content:flex-end; }
     }
   </style>
 
@@ -138,16 +178,35 @@
       </a>
 
       <nav class="menu" aria-label="Menu do site">
-        {{-- Somente "Início" e "Área do Candidato" --}}
+        {{-- Link "Início" sempre visível --}}
         <a href="{{ route('site.concursos.index') }}">Início</a>
 
-        @auth('candidato')
-          <a class="btn primary" href="{{ route('candidato.home') }}">Área do Candidato</a>
+        @if($candidatoLogado)
+          {{-- Quando há candidato logado --}}
+          <a class="btn primary" href="{{ route('candidato.home') }}">
+            Área do Candidato
+          </a>
+
+          <div class="menu-user">
+            <span class="user-pill">
+              {{ Str::limit($candidatoLogado->nome, 22) }}
+            </span>
+
+            <form method="POST" action="{{ route('candidato.logout') }}">
+              @csrf
+              <button type="submit" class="btn btn-logout">
+                Sair
+              </button>
+            </form>
+          </div>
         @else
+          {{-- Visitante (não logado como candidato) --}}
           @if(Route::has('candidato.login'))
-            <a class="btn primary" href="{{ route('candidato.login') }}">Área do Candidato</a>
+            <a class="btn primary" href="{{ route('candidato.login') }}">
+              Área do Candidato
+            </a>
           @endif
-        @endauth
+        @endif
       </nav>
     </div>
   </header>
@@ -180,9 +239,15 @@
         </div>
         <div>
           <div style="font-weight:700; margin-bottom:6px;">Candidato</div>
-          @if(Route::has('candidato.login'))   <div class="muted"><a href="{{ route('candidato.login') }}">Área do Candidato</a></div>@endif
-          @if(Route::has('candidato.register'))<div class="muted"><a href="{{ route('candidato.register') }}">Criar conta</a></div>@endif
-          @if(Route::has('candidato.password.request'))<div class="muted"><a href="{{ route('candidato.password.request') }}">Esqueci minha senha</a></div>@endif
+          @if(Route::has('candidato.login'))
+            <div class="muted"><a href="{{ route('candidato.login') }}">Área do Candidato</a></div>
+          @endif
+          @if(Route::has('candidato.register'))
+            <div class="muted"><a href="{{ route('candidato.register') }}">Criar conta</a></div>
+          @endif
+          @if(Route::has('candidato.password.request'))
+            <div class="muted"><a href="{{ route('candidato.password.request') }}">Esqueci minha senha</a></div>
+          @endif
         </div>
       </div>
       <hr>
