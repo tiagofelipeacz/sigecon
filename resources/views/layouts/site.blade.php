@@ -98,8 +98,18 @@
     .brand-text{ color:#111827; }
 
     .menu{ display:flex; align-items:center; gap:10px; }
-    .menu a{ font-size:14px; padding:10px 12px; border-radius:10px; border:1px solid transparent; }
-    .menu a:hover{ background:#f9fafb; border-color:#e5e7eb; }
+
+    /* Links simples do menu (ex.: "Início") */
+    .menu > a:not(.btn){
+      font-size:14px;
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid transparent;
+    }
+    .menu > a:not(.btn):hover{
+      background:#f9fafb;
+      border-color:#e5e7eb;
+    }
 
     .btn{
       display:inline-flex; align-items:center; gap:8px;
@@ -107,10 +117,20 @@
       padding:10px 14px; border-radius:10px;
       cursor:pointer; text-decoration:none; color:#111827;
       font-size:14px;
+      transition: background-color .15s, border-color .15s, filter .15s;
     }
     .btn:hover{ background:#f9fafb; }
-    .btn.primary{ background:var(--site-accent); border-color:var(--site-accent); color:#fff; }
-    .btn.primary:hover{ filter:brightness(1.05); }
+    .btn.primary{
+      background:var(--site-accent);
+      border-color:var(--site-accent);
+      color:#fff;
+    }
+    .btn.primary:hover{
+      background:var(--site-accent); /* mantém a cor no hover */
+      border-color:var(--site-accent);
+      color:#fff;
+      filter:brightness(1.05);
+    }
 
     /* Área de usuário/logado no header */
     .menu-user{

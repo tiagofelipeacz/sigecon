@@ -1,7 +1,7 @@
 <?php
 
 namespace App\Models;
-
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -9,21 +9,48 @@ class CandidatoInscricao extends Model
 {
     use SoftDeletes;
 
-    protected $table = 'concursos_inscritos';
+    // TABELA ANTIGA, A CORRETA PARA AS INSCRIÇÕES
+    protected $table = 'inscricoes';
 
     protected $fillable = [
-        'candidato_id',
-        'concurso_id',
+        'edital_id',
         'cargo_id',
-        'localidade_id',
         'item_id',
-        'protocolo',
+        'user_id',
+        'candidato_id',
+        'cpf',
+        'documento',
+        'cidade',
+        'nome_inscricao',
+        'nome_candidato',
+        'nascimento',
+        'modalidade',
         'status',
-        'taxa_inscricao',
-        'extras',
+        'numero',
+        'pessoa_key',
+        'local_key',
+        'ativo',
     ];
 
     protected $casts = [
-        'extras' => 'array',
+        'nascimento' => 'date',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
+
+    /**
+     * Alias para facilitar: tratar edital_id como se fosse concurso_id
+     */
+    public function getConcursoIdAttribute()
+    {
+        return $this->edital_id;
+    }
+
+    /**
+     * Alias: tratar numero como se fosse "protocolo" / nº de inscrição
+     */
+    public function getProtocoloAttribute()
+    {
+        return $this->numero;
+    }
 }

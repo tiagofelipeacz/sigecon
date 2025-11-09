@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use App\Models\CandidatoInscricao;
 use App\Models\Candidato;
 
@@ -13,25 +14,33 @@ class InscricaoController extends Controller
 {
     /**
      * Lista de inscrições do candidato.
-     * Agora já traz:
-     * - inscrições do candidato
-     * - dados dos concursos e cargos em lote
-     * - coleção agrupada por concurso para montar blocos na tela
+     * - Busca na tabela "inscricoes"
+     * - Considera candidato_id OU cpf
+     * - Carrega dados de concursos e cargos em lote
+     * - Agrupa por concurso (edital) para exibir em blocos
      */
     public function index()
     {
+        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
 
-        // Todas as inscrições do candidato
-        $inscricoes = CandidatoInscricao::where('candidato_id', $user->id)
+        // Todas as inscrições do candidato (candidato_id OU cpf)
+        $inscricoes = CandidatoInscricao::where(function ($q) use ($user) {
+                $q->where('candidato_id', $user->id);
+
+                if (!empty($user->cpf)) {
+                    $q->orWhere('cpf', $user->cpf);
+                }
+            })
+            ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->get();
 
-        // Pega IDs únicos de concursos e cargos para buscar em lote
+        // IDs únicos de concursos (edital_id) e cargos
         $concursoIds = $inscricoes->pluck('concurso_id')->unique()->filter()->values();
         $cargoIds    = $inscricoes->pluck('cargo_id')->unique()->filter()->values();
 
-        // Concursos (título, edital, etc.)
+        // Concursos (título, edital, etc.) — tabela "concursos"
         $concursos = $concursoIds->isNotEmpty()
             ? DB::table('concursos')
                 ->whereIn('id', $concursoIds)
@@ -39,16 +48,26 @@ class InscricaoController extends Controller
                 ->keyBy('id')
             : collect();
 
-        // Cargos (nome do cargo)
-        $cargos = $cargoIds->isNotEmpty()
-            ? DB::table('concursos_vagas_cargos')
-                ->whereIn('id', $cargoIds)
-                ->get()
-                ->keyBy('id')
-            : collect();
+        // Cargos: tenta na tabela nova; se não achar nada, tenta na tabela antiga "cargos"
+        $cargos = collect();
+        if ($cargoIds->isNotEmpty()) {
+            if (Schema::hasTable('concursos_vagas_cargos')) {
+                $cargos = DB::table('concursos_vagas_cargos')
+                    ->whereIn('id', $cargoIds)
+                    ->get()
+                    ->keyBy('id');
+            }
 
-        // Agrupa inscrições por concurso para exibir blocos separados na tela
-        $inscricoesPorConcurso = $inscricoes->groupBy('concurso_id');
+            if ($cargos->isEmpty() && Schema::hasTable('cargos')) {
+                $cargos = DB::table('cargos')
+                    ->whereIn('id', $cargoIds)
+                    ->get()
+                    ->keyBy('id');
+            }
+        }
+
+        // Agrupa inscrições por concurso (edital) para exibir blocos separados na tela
+        $inscricoesPorConcurso = $inscricoes->groupBy('concurso_id'); // accessor -> edital_id
 
         return view('site.candidato.inscricoes.index', compact(
             'inscricoes',
@@ -100,15 +119,16 @@ class InscricaoController extends Controller
 
     public function store(Request $request)
     {
+        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
 
         $data = $request->validate([
-            'concurso_id' => ['required', 'integer'],
+            'concurso_id' => ['required', 'integer'], // id na tabela "concursos"
             'cargo_id'    => ['required', 'integer'],
             'item_id'     => ['nullable', 'integer'],
         ]);
 
-        // Pega info do concurso/cargo/item para taxa e protocolo
+        // Pega info do concurso/cargo/item para validar período e vínculos
         $concurso = DB::table('concursos')->where('id', $data['concurso_id'])->first();
         abort_unless($concurso, 404);
 
@@ -120,6 +140,7 @@ class InscricaoController extends Controller
             ]);
         }
 
+        // Cargo (tabela nova de cargos por concurso)
         $cargo = DB::table('concursos_vagas_cargos')
             ->where('id', $data['cargo_id'])
             ->where('concurso_id', $concurso->id)
@@ -127,7 +148,6 @@ class InscricaoController extends Controller
         abort_unless($cargo, 404);
 
         $item = null;
-        $localidade_id = null;
         if (!empty($data['item_id'])) {
             $item = DB::table('concursos_vagas_itens')
                 ->where('id', $data['item_id'])
@@ -135,44 +155,48 @@ class InscricaoController extends Controller
                 ->where('cargo_id', $cargo->id)
                 ->first();
             abort_unless($item, 404);
-            $localidade_id = $item->localidade_id;
         }
 
-        // Impede duplicidade: um candidato por concurso
-        $ja = CandidatoInscricao::where('candidato_id', $user->id)
-            ->where('concurso_id', $concurso->id)
+        // Impede duplicidade: um candidato por concurso (edital)
+        $ja = CandidatoInscricao::where(function ($q) use ($user) {
+                $q->where('candidato_id', $user->id);
+                if (!empty($user->cpf)) {
+                    $q->orWhere('cpf', $user->cpf);
+                }
+            })
+            ->where('edital_id', $concurso->id)
             ->exists();
+
         if ($ja) {
             return redirect()
                 ->route('candidato.inscricoes.index')
                 ->withErrors(['general' => 'Você já possui inscrição neste concurso.']);
         }
 
-        // Protocolo: AAAAMMDD-CCC-######## (CCC = id concurso)
-        $seq = (int) ($concurso->sequence_inscricao ?? 1);
-        $protocolo = now()->format('Ymd')
-            . '-' . str_pad((string) $concurso->id, 3, '0', STR_PAD_LEFT)
-            . '-' . str_pad((string) $seq, 6, '0', STR_PAD_LEFT);
+        // Número da inscrição (campo "numero" da tabela inscricoes)
+        $maxNumero  = CandidatoInscricao::max('numero');
+        $nextNumero = $maxNumero ? ($maxNumero + 1) : 1000001;
 
-        $taxa = $cargo->taxa_inscricao ?? $concurso->taxa_inscricao;
-
-        // Cria a inscrição
+        // Cria a inscrição na TABELA ANTIGA "inscricoes"
         $insc = CandidatoInscricao::create([
-            'candidato_id'    => $user->id,
-            'concurso_id'     => $concurso->id,
-            'cargo_id'        => $cargo->id,
-            'localidade_id'   => $localidade_id,
-            'item_id'         => $item->id ?? null,
-            'protocolo'       => $protocolo,
-            'status'          => 'inscrito',
-            'taxa_inscricao'  => $taxa,
-            'extras'          => null,
+            'edital_id'      => $concurso->id,
+            'cargo_id'       => $cargo->id,
+            'item_id'        => $item->id ?? null,
+            'user_id'        => null,
+            'candidato_id'   => $user->id,
+            'cpf'            => $user->cpf,
+            'documento'      => null,
+            'cidade'         => null,
+            'nome_inscricao' => $user->nome,
+            'nome_candidato' => $user->nome,
+            'nascimento'     => $user->data_nascimento,
+            'modalidade'     => 'ampla',
+            'status'         => 'confirmada',
+            'numero'         => $nextNumero,
+            'pessoa_key'     => 'C#' . str_pad((string) $user->id, 20, '0', STR_PAD_LEFT),
+            'local_key'      => 0,
+            'ativo'          => 1,
         ]);
-
-        // Incrementa sequence do concurso (para próximos protocolos)
-        DB::table('concursos')
-            ->where('id', $concurso->id)
-            ->update(['sequence_inscricao' => $seq + 1]);
 
         return redirect()
             ->route('candidato.inscricoes.show', $insc->id)
@@ -181,16 +205,40 @@ class InscricaoController extends Controller
 
     public function show($id)
     {
+        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
+
+        // Busca a inscrição garantindo que ela é do candidato (por id OU cpf)
         $insc = CandidatoInscricao::where('id', $id)
-            ->where('candidato_id', $user->id)
+            ->where(function ($q) use ($user) {
+                $q->where('candidato_id', $user->id);
+                if (!empty($user->cpf)) {
+                    $q->orWhere('cpf', $user->cpf);
+                }
+            })
             ->firstOrFail();
 
-        // Carrega alguns detalhes para exibir
-        $concurso = DB::table('concursos')->where('id', $insc->concurso_id)->first();
-        $cargo = DB::table('concursos_vagas_cargos')->where('id', $insc->cargo_id)->first();
+        // Concurso (tabela "concursos", usando edital_id/concurso_id)
+        $concurso = DB::table('concursos')
+            ->where('id', $insc->concurso_id) // accessor => edital_id
+            ->first();
+
+        // Cargo: tenta na tabela nova, depois na tabela antiga "cargos"
+        $cargo = null;
+        if ($insc->cargo_id) {
+            $cargo = DB::table('concursos_vagas_cargos')
+                ->where('id', $insc->cargo_id)
+                ->first();
+
+            if (!$cargo && Schema::hasTable('cargos')) {
+                $cargo = DB::table('cargos')
+                    ->where('id', $insc->cargo_id)
+                    ->first();
+            }
+        }
+
         $localidade = null;
-        if ($insc->localidade_id) {
+        if ($insc->localidade_id ?? null) {
             $localidade = DB::table('concursos_vagas_localidades')
                 ->where('id', $insc->localidade_id)
                 ->first();
@@ -207,27 +255,50 @@ class InscricaoController extends Controller
 
     public function comprovante($id)
     {
+        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
+
         $insc = CandidatoInscricao::where('id', $id)
-            ->where('candidato_id', $user->id)
+            ->where(function ($q) use ($user) {
+                $q->where('candidato_id', $user->id);
+                if (!empty($user->cpf)) {
+                    $q->orWhere('cpf', $user->cpf);
+                }
+            })
             ->firstOrFail();
 
-        $concurso = DB::table('concursos')->where('id', $insc->concurso_id)->first();
-        $cargo = DB::table('concursos_vagas_cargos')->where('id', $insc->cargo_id)->first();
+        $concurso = DB::table('concursos')
+            ->where('id', $insc->concurso_id)
+            ->first();
+
+        // Cargo: mesma lógica do show()
+        $cargo = null;
+        if ($insc->cargo_id) {
+            $cargo = DB::table('concursos_vagas_cargos')
+                ->where('id', $insc->cargo_id)
+                ->first();
+
+            if (!$cargo && Schema::hasTable('cargos')) {
+                $cargo = DB::table('cargos')
+                    ->where('id', $insc->cargo_id)
+                    ->first();
+            }
+        }
+
         $localidade = null;
-        if ($insc->localidade_id) {
+        if ($insc->localidade_id ?? null) {
             $localidade = DB::table('concursos_vagas_localidades')
                 ->where('id', $insc->localidade_id)
                 ->first();
         }
 
-        // Se dompdf estiver instalado, gera PDF, senão retorna HTML "imprimível"
+        // Se dompdf estiver instalado, gera PDF; senão retorna HTML "imprimível"
         if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
             $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView(
                 'site.candidato.inscricoes.comprovante_pdf',
                 compact('insc', 'concurso', 'cargo', 'localidade', 'user')
             );
-            return $pdf->download('comprovante_' . $insc->protocolo . '.pdf');
+            return $pdf->download('comprovante_' . $insc->numero . '.pdf');
         }
 
         // Fallback: renderiza HTML imprimível
