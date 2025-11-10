@@ -6,6 +6,16 @@
 @php
     $primary = $site['primary_color'] ?? $site['primary'] ?? '#0f172a';
     $accent  = $site['accent_color']  ?? $site['accent']  ?? '#111827';
+
+    // Convenções esperadas do controller:
+    // $modalidadesDisponiveis ou $modalidades  -> lista de modalidades da vaga/concurso (opcional)
+    // $formasPagamento                         -> formas de pagamento configuradas (opcional)
+    // $temIsencao / $tiposIsencao              -> se há algum tipo de isenção no concurso (opcional)
+
+    $modalidadesLista = $modalidadesDisponiveis ?? $modalidades ?? [];
+    $formasPgLista    = $formasPagamento ?? [];
+    $tiposIsencao     = $tiposIsencao ?? [];
+    $temIsencao       = $temIsencao ?? (!empty($tiposIsencao));
 @endphp
 
 @section('content')
@@ -130,19 +140,24 @@
         font-size:12px;
         color:var(--c-muted);
     }
-    .c-input, .c-select{
+    .c-input, .c-select, .c-textarea{
         border-radius:10px;
         border:1px solid var(--c-border);
         padding:8px 10px;
         font-size:14px;
         width:100%;
         background:#f9fafb;
+        font-family:inherit;
     }
-    .c-input:focus, .c-select:focus{
+    .c-input:focus, .c-select:focus, .c-textarea:focus{
         outline:none;
         border-color:var(--c-primary);
         background:#fff;
         box-shadow:0 0 0 1px rgba(37,99,235,0.15);
+    }
+    .c-textarea{
+        min-height:70px;
+        resize:vertical;
     }
 
     .c-error{
@@ -176,6 +191,16 @@
         box-shadow:0 14px 28px rgba(15,23,42,0.24);
     }
 
+    .c-checkbox-row{
+        display:flex;
+        align-items:flex-start;
+        gap:8px;
+        font-size:13px;
+    }
+    .c-checkbox-row input[type="checkbox"]{
+        margin-top:2px;
+    }
+
     @media (max-width: 840px){
         .c-page{
             padding-top:20px;
@@ -198,8 +223,8 @@
                 <div class="c-kicker">Área do Candidato</div>
                 <h1 class="c-title">Nova inscrição</h1>
                 <p class="c-sub">
-                    Selecione o concurso, o cargo desejado e, quando disponível, a localidade de prova.
-                    As informações da inscrição serão exibidas na sua área de inscrições.
+                    Selecione o concurso, o cargo desejado, a cidade de prova e informe,
+                    se for o caso, modalidade, condições especiais e isenção (quando disponíveis).
                 </p>
             </div>
 
@@ -259,19 +284,163 @@
                         @enderror
                     </div>
 
-                    {{-- Localidade (opcional) --}}
+                    {{-- Localidade (Cidade de prova) --}}
                     <div class="c-field">
-                        <label class="c-label" for="item_id">Localidade de prova (quando houver)</label>
+                        <label class="c-label" for="item_id">Cidade / local de prova (quando houver)</label>
                         <select name="item_id" id="item_id" class="c-select">
                             <option value="">Selecione o cargo...</option>
                         </select>
                         <div class="c-help">
-                            Algumas seleções permitem escolher a cidade/local de prova. Caso não apareça, será definida posteriormente.
+                            Quando o concurso tiver cidades de prova, elas aparecerão aqui.
                         </div>
                         @error('item_id')
                         <div class="c-error">{{ $message }}</div>
                         @enderror
                     </div>
+
+                    {{-- Modalidade (dinâmica a partir da configuração do concurso / vaga) --}}
+                    <div class="c-field">
+                        <label class="c-label" for="modalidade">Modalidade de concorrência</label>
+
+                        @if(!empty($modalidadesLista) && count($modalidadesLista))
+                            <select name="modalidade" id="modalidade" class="c-select">
+                                <option value="">Selecione...</option>
+                                @foreach($modalidadesLista as $mod)
+                                    @php
+                                        // Tenta descobrir valor e rótulo com nomes genéricos
+                                        $value = $mod->codigo
+                                            ?? $mod->slug
+                                            ?? $mod->id
+                                            ?? ($mod['codigo'] ?? $mod['slug'] ?? $mod['id'] ?? null);
+
+                                        $label = $mod->nome
+                                            ?? $mod->descricao
+                                            ?? ($mod['nome'] ?? $mod['descricao'] ?? $value);
+                                    @endphp
+                                    @if($value)
+                                        <option value="{{ $value }}" {{ old('modalidade') == $value ? 'selected' : '' }}>
+                                            {{ $label }}
+                                        </option>
+                                    @endif
+                                @endforeach
+                            </select>
+                            <div class="c-help">
+                                As modalidades acima foram configuradas para este concurso/cargo.
+                                Se tiver dúvidas, consulte o edital.
+                            </div>
+                        @else
+                            {{-- Sem modalidades configuradas: padrão ampla concorrência --}}
+                            <input type="hidden" name="modalidade" value="{{ old('modalidade', 'ampla') }}">
+                            <div class="c-help">
+                                Este concurso não possui modalidades diferenciadas configuradas.
+                                A inscrição será considerada em <strong>ampla concorrência</strong>.
+                            </div>
+                        @endif
+
+                        @error('modalidade')
+                        <div class="c-error">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    {{-- Condições especiais --}}
+                    <div class="c-field">
+                        <label class="c-label" for="condicoes_especiais">Condições especiais</label>
+                        <textarea
+                            name="condicoes_especiais"
+                            id="condicoes_especiais"
+                            class="c-textarea"
+                            placeholder="Descreva se precisa de atendimento especial, recursos de acessibilidade ou outras condições previstas em edital."
+                        >{{ old('condicoes_especiais') }}</textarea>
+                        @error('condicoes_especiais')
+                        <div class="c-error">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    {{-- Isenção (só aparece se o concurso tiver tipo de isenção configurado) --}}
+                    @if($temIsencao)
+                        <div class="c-field">
+                            <div class="c-checkbox-row">
+                                <input
+                                    type="checkbox"
+                                    id="solicitou_isencao"
+                                    name="solicitou_isencao"
+                                    value="1"
+                                    {{ old('solicitou_isencao') ? 'checked' : '' }}
+                                >
+                                <label for="solicitou_isencao">
+                                    Solicito isenção da taxa de inscrição, nos termos previstos no edital.
+                                </label>
+                            </div>
+
+                            @if(!empty($tiposIsencao))
+                                <div style="margin-top:6px;">
+                                    <label class="c-label" for="tipo_isencao" style="font-weight:500;">Tipo de isenção</label>
+                                    <select name="tipo_isencao" id="tipo_isencao" class="c-select">
+                                        <option value="">Selecione...</option>
+                                        @foreach($tiposIsencao as $tipo)
+                                            @php
+                                                $val = $tipo->codigo
+                                                    ?? $tipo->id
+                                                    ?? ($tipo['codigo'] ?? $tipo['id'] ?? null);
+                                                $rot = $tipo->nome
+                                                    ?? $tipo->descricao
+                                                    ?? ($tipo['nome'] ?? $tipo['descricao'] ?? $val);
+                                            @endphp
+                                            @if($val)
+                                                <option value="{{ $val }}" {{ old('tipo_isencao') == $val ? 'selected' : '' }}>
+                                                    {{ $rot }}
+                                                </option>
+                                            @endif
+                                        @endforeach
+                                    </select>
+                                </div>
+                            @endif
+
+                            <div class="c-help">
+                                A concessão da isenção depende de análise e deferimento conforme as regras do edital.
+                            </div>
+
+                            @error('solicitou_isencao')
+                            <div class="c-error">{{ $message }}</div>
+                            @enderror
+                            @error('tipo_isencao')
+                            <div class="c-error">{{ $message }}</div>
+                            @enderror
+                        </div>
+                    @endif
+
+                    {{-- Forma de pagamento (só aparece se houver configuração) --}}
+                    @if(!empty($formasPgLista) && count($formasPgLista))
+                        <div class="c-field">
+                            <label class="c-label" for="forma_pagamento">Forma de pagamento</label>
+                            <select name="forma_pagamento" id="forma_pagamento" class="c-select">
+                                <option value="">Selecionar...</option>
+                                @foreach($formasPgLista as $fp)
+                                    @php
+                                        $val = $fp->codigo
+                                            ?? $fp->slug
+                                            ?? $fp->id
+                                            ?? ($fp['codigo'] ?? $fp['slug'] ?? $fp['id'] ?? null);
+                                        $rot = $fp->nome
+                                            ?? $fp->descricao
+                                            ?? ($fp['nome'] ?? $fp['descricao'] ?? $val);
+                                    @endphp
+                                    @if($val)
+                                        <option value="{{ $val }}" {{ old('forma_pagamento') == $val ? 'selected' : '' }}>
+                                            {{ $rot }}
+                                        </option>
+                                    @endif
+                                @endforeach
+                            </select>
+                            <div class="c-help">
+                                Escolha a forma de pagamento da taxa, conforme opções disponibilizadas no concurso.
+                            </div>
+                            @error('forma_pagamento')
+                            <div class="c-error">{{ $message }}</div>
+                            @enderror
+                        </div>
+                    @endif
+
                 </div>
 
                 <div class="c-submit-row">
@@ -319,7 +488,7 @@
                     data.forEach(c => {
                         const opt = document.createElement('option');
                         opt.value = c.id;
-                        opt.textContent = c.nome;
+                        opt.textContent = c.nome || ('Cargo #' + c.id);
                         selectCargo.appendChild(opt);
                     });
                 })
@@ -343,6 +512,10 @@
                 .then(resp => resp.json())
                 .then(data => {
                     clearSelect(selectItem, 'Selecione (opcional)...');
+                    if(!data || !data.length){
+                        selectItem.options[0].textContent = 'Não há cidades específicas para este cargo';
+                        return;
+                    }
                     data.forEach(i => {
                         const opt = document.createElement('option');
                         opt.value = i.item_id;

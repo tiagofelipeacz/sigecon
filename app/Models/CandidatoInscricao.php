@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -32,7 +31,7 @@ class CandidatoInscricao extends Model
         'local_key',
         'ativo',
 
-        // Novos campos
+        // NOVOS CAMPOS RELACIONADOS À INSCRIÇÃO
         'condicoes_especiais',
         'solicitou_isencao',
         'forma_pagamento',
@@ -40,9 +39,9 @@ class CandidatoInscricao extends Model
     ];
 
     protected $casts = [
-        'nascimento'        => 'date',
-        'created_at'        => 'datetime',
-        'updated_at'        => 'datetime',
+        'nascimento' => 'date',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
         'solicitou_isencao' => 'boolean',
     ];
 
