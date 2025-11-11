@@ -70,7 +70,8 @@ class AuthController extends Controller
             $user->forceFill(['last_login_at' => now()])->save();
         }
 
-        return redirect()->intended(route('candidato.home'));
+        // 👉 Sempre manda para a home do candidato (não usa mais "intended")
+        return redirect()->route('candidato.home');
     }
 
     /**
@@ -281,9 +282,9 @@ class AuthController extends Controller
             }
         }
 
-        // Sem verificação de e-mail: vai direto para a área do candidato
+        // 👉 Depois de cadastrar, também vai direto para a home do candidato
         return redirect()
-            ->intended(route('candidato.home'))
+            ->route('candidato.home')
             ->with('status', 'Cadastro realizado com sucesso! Você já pode acessar a área do candidato.');
     }
 
