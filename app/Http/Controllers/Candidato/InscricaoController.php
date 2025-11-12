@@ -83,6 +83,7 @@ class InscricaoController extends Controller
      *
      * - Lista concursos abertos
      * - Monta mapa de modalidades por (concurso_id, cargo_id)
+     * - Monta mapa de condições especiais por concurso
      * - Se vier ?concurso_id=... (ou ?concurso=...), trava o concurso na view
      */
     public function create(Request $request)
@@ -211,8 +212,93 @@ class InscricaoController extends Controller
             ];
         }
 
-        // Condições especiais: livre (campo de texto por enquanto)
-        $condicoesEspeciais = [];
+        // ------------------------------------------------------
+        // CONDIÇÕES ESPECIAIS DINÂMICAS POR CONCURSO
+        // ------------------------------------------------------
+        $condicoesEspeciaisMap = [];
+
+        if (
+            $concursos->isNotEmpty() &&
+            Schema::hasTable('concurso_tipo_condicao_especial') &&
+            Schema::hasTable('tipos_condicao_especial')
+        ) {
+            $concursoIds = $concursos->pluck('id')->filter()->values();
+
+            // Descobre dinamicamente quais colunas de texto existem na tabela de tipos
+            $labelCandidateCols = ['nome', 'descricao', 'descricao_condicao', 'titulo', 'texto', 'label'];
+            $labelCols = [];
+            foreach ($labelCandidateCols as $col) {
+                if (Schema::hasColumn('tipos_condicao_especial', $col)) {
+                    $labelCols[] = $col;
+                }
+            }
+
+            // Monta lista de colunas para o select
+            $selects = ['ctce.concurso_id', 't.id'];
+            if (Schema::hasColumn('tipos_condicao_especial', 'codigo')) {
+                $selects[] = 't.codigo';
+            }
+            foreach ($labelCols as $col) {
+                $selects[] = 't.' . $col . ' as ' . $col;
+            }
+
+            $q = DB::table('concurso_tipo_condicao_especial as ctce')
+                ->join('tipos_condicao_especial as t', 't.id', '=', 'ctce.tipo_condicao_especial_id')
+                ->whereIn('ctce.concurso_id', $concursoIds)
+                ->select($selects);
+
+            // Se existirem colunas de "ativo", filtra
+            if (Schema::hasColumn('tipos_condicao_especial', 'ativo')) {
+                $q->where('t.ativo', 1);
+            }
+            if (Schema::hasColumn('concurso_tipo_condicao_especial', 'ativo')) {
+                $q->where('ctce.ativo', 1);
+            }
+
+            // Ordenação amigável
+            if (Schema::hasColumn('tipos_condicao_especial', 'ordem')) {
+                $q->orderBy('t.ordem');
+            } elseif (Schema::hasColumn('tipos_condicao_especial', 'nome')) {
+                $q->orderBy('t.nome');
+            } elseif (Schema::hasColumn('tipos_condicao_especial', 'descricao')) {
+                $q->orderBy('t.descricao');
+            } else {
+                $q->orderBy('t.id');
+            }
+
+            $rows = $q->get();
+
+            foreach ($rows as $row) {
+                // Monta o label a partir das colunas de texto encontradas
+                $label = null;
+                foreach ($labelCols as $col) {
+                    if (!empty($row->{$col})) {
+                        $label = $row->{$col};
+                        break;
+                    }
+                }
+
+                // Se ainda não achou nada, tenta usar "codigo"
+                if (!$label && isset($row->codigo) && $row->codigo !== null && $row->codigo !== '') {
+                    $label = $row->codigo;
+                }
+
+                // Último fallback: "Condição especial #ID"
+                if (!$label) {
+                    $label = 'Condição especial #' . $row->id;
+                }
+
+                $condicoesEspeciaisMap[$row->concurso_id][] = [
+                    'id'        => $row->id,
+                    'value'     => $row->id,
+                    'codigo'    => $row->codigo ?? null,
+                    'label'     => $label,
+                ];
+            }
+        }
+
+        // Backward-compat: se a view ainda usar $condicoesEspeciais, aponta para o map
+        $condicoesEspeciais = $condicoesEspeciaisMap;
 
         // Isenção: por enquanto só o "checkbox", sem tipos dinâmicos
         $tiposIsencao     = [];
@@ -222,9 +308,10 @@ class InscricaoController extends Controller
         return view('site.candidato.inscricoes.create', compact(
             'concursos',
             'concursoSelecionado',
-            'modalidades',          // usado pela view como lista base
-            'modalidadesPorCargo',  // mapa (concurso|cargo) => modalidades dinâmicas
-            'condicoesEspeciais',
+            'modalidades',              // usado pela view como lista base
+            'modalidadesPorCargo',      // mapa (concurso|cargo) => modalidades dinâmicas
+            'condicoesEspeciaisMap',    // mapa concurso_id => condições especiais
+            'condicoesEspeciais',       // alias (retrocompat)
             'tiposIsencao',
             'temIsencao',
             'formasPagamento'
@@ -365,13 +452,6 @@ class InscricaoController extends Controller
 
     /**
      * Salva uma nova inscrição (tabela antiga "inscricoes")
-     *
-     * OBS:
-     *  - o campo "modalidade" recebe exatamente o texto da opção escolhida
-     *    no select ("Ampla concorrência", "Negros", "Pessoa com deficiência", etc.)
-     *  - a cidade de prova pode vir:
-     *      * do campo "cidade_prova" (select de cidades do concurso)
-     *      * ou, se vazio, do nome da localidade do item escolhido
      */
     public function store(Request $request)
     {
@@ -384,11 +464,13 @@ class InscricaoController extends Controller
             'item_id'              => ['nullable', 'integer'],
 
             // CAMPOS DA TELA
-            'modalidade'           => ['required', 'string', 'max:50'],
-            'condicoes_especiais'  => ['nullable', 'string'],
-            'solicitou_isencao'    => ['nullable', 'boolean'],
-            'forma_pagamento'      => ['nullable', 'string', 'max:50'],
-            'cidade_prova'         => ['nullable', 'string', 'max:100'], // texto vindo do select de cidades
+            'modalidade'                   => ['required', 'string', 'max:50'],
+            'condicoes_especiais'          => ['nullable', 'string'],
+            'condicoes_especiais_opcoes'   => ['nullable', 'array'],
+            'condicoes_especiais_opcoes.*' => ['nullable', 'string', 'max:100'],
+            'solicitou_isencao'            => ['nullable', 'boolean'],
+            'forma_pagamento'              => ['nullable', 'string', 'max:50'],
+            'cidade_prova'                 => ['nullable', 'string', 'max:100'], // texto vindo do select de cidades
         ]);
 
         // Pega info do concurso/cargo/item para validar período e vínculos
@@ -409,6 +491,20 @@ class InscricaoController extends Controller
             ->where('concurso_id', $concurso->id)
             ->first();
         abort_unless($cargo, 404);
+
+        // Se existirem localidades para este cargo, item_id passa a ser obrigatório
+        if (Schema::hasTable('concursos_vagas_itens')) {
+            $temItens = DB::table('concursos_vagas_itens')
+                ->where('concurso_id', $concurso->id)
+                ->where('cargo_id', $cargo->id)
+                ->exists();
+
+            if ($temItens && empty($data['item_id'])) {
+                return back()->withInput()->withErrors([
+                    'item_id' => 'Selecione a localidade para este cargo.',
+                ]);
+            }
+        }
 
         $item = null;
         if (!empty($data['item_id'])) {
@@ -454,6 +550,23 @@ class InscricaoController extends Controller
             }
         }
 
+        // Monta texto final de condições especiais (opções + texto livre)
+        $textoCondicoes = $data['condicoes_especiais'] ?? null;
+        if (!empty($data['condicoes_especiais_opcoes']) && is_array($data['condicoes_especiais_opcoes'])) {
+            $opcoes = array_filter($data['condicoes_especiais_opcoes'], function ($v) {
+                return trim((string) $v) !== '';
+            });
+
+            if (!empty($opcoes)) {
+                $opcoesStr = implode('; ', $opcoes);
+                if ($textoCondicoes) {
+                    $textoCondicoes = $opcoesStr . ' | ' . $textoCondicoes;
+                } else {
+                    $textoCondicoes = $opcoesStr;
+                }
+            }
+        }
+
         $solicitouIsencao = !empty($data['solicitou_isencao']) ? 1 : 0;
         $formaPagamento   = $data['forma_pagamento'] ?? null;
         $pagamentoStatus  = 'pendente';
@@ -478,7 +591,7 @@ class InscricaoController extends Controller
             'local_key'      => 0,
             'ativo'          => 1,
 
-            'condicoes_especiais' => $data['condicoes_especiais'] ?? null,
+            'condicoes_especiais' => $textoCondicoes,
             'solicitou_isencao'   => $solicitouIsencao,
             'forma_pagamento'     => $formaPagamento,
             'pagamento_status'    => $pagamentoStatus,

@@ -429,6 +429,10 @@
                     <div class="c-field" id="field_condicoes_especiais" style="display:none;">
                         <label class="c-label">Condições especiais</label>
 
+                        <div class="c-help" style="margin-bottom:4px;">
+                            Desejo solicitar condições especiais para a realização da prova, conforme previsto no edital.
+                        </div>
+
                         <div id="condicoes_especiais_opcoes" class="c-condicoes-opcoes">
                             {{-- checkboxes gerados via JS --}}
                         </div>
@@ -855,6 +859,11 @@
             const oldCargo    = @json(old('cargo_id'));
 
             const initialConcurso = oldConcurso || fixedConcursoId;
+
+            if (initialConcurso) {
+                // Preenche condições especiais logo de cara, se já houver concurso definido
+                preencherCondicoesEspeciais(initialConcurso);
+            }
 
             if (selectConcurso && initialConcurso) {
                 selectConcurso.value = initialConcurso;
