@@ -32,7 +32,8 @@
     $nasc          = $insc->nascimento ?? $user->data_nascimento ?? null;
     $dataNasc      = $nasc ? \Carbon\Carbon::parse($nasc)->format('d/m/Y') : '—';
 
-    $modalidade    = strtoupper($insc->modalidade ?? 'AMPLA');
+    // Modalidade: usa exatamente o texto salvo na inscrição, com fallback
+    $modalidade    = $insc->modalidade ?: 'Ampla concorrência';
 @endphp
 <!doctype html>
 <html lang="pt-BR">

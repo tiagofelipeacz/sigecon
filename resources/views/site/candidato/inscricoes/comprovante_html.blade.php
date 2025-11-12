@@ -1,3 +1,4 @@
+{{-- resources/views/site/candidato/inscricoes/comprovante_html.blade.php --}}
 @extends('layouts.site')
 
 @section('title', 'Comprovante de inscrição')

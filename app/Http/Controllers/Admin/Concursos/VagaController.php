@@ -52,7 +52,10 @@ class VagaController extends Controller
 
         // Níveis (para o <select> no formulário)
         $niveis = DB::table('niveis_escolaridade')
-            ->when(Schema::hasColumn('niveis_escolaridade', 'ativo'), fn($q) => $q->where('ativo', 1))
+            ->when(
+                Schema::hasColumn('niveis_escolaridade', 'ativo'),
+                fn($q) => $q->where('ativo', 1)
+            )
             ->orderByRaw(
                 Schema::hasColumn('niveis_escolaridade', 'ordem')
                     ? 'ordem IS NULL, ordem ASC, nome ASC'
@@ -194,10 +197,15 @@ class VagaController extends Controller
             ->where('i.concurso_id', $concurso->id)
             ->select($selects);
 
-        if ($hasOrdemItem) $itensQB->orderBy('i.ordem');
+        if ($hasOrdemItem) {
+            $itensQB->orderBy('i.ordem');
+        }
         $itensQB->orderBy('c.nome');
-        if ($usaLocalString) $itensQB->orderBy('i.local');
-        else $itensQB->orderBy('l.nome');
+        if ($usaLocalString) {
+            $itensQB->orderBy('i.local');
+        } else {
+            $itensQB->orderBy('l.nome');
+        }
 
         $itens = $itensQB->get();
 
@@ -389,7 +397,9 @@ class VagaController extends Controller
             }
 
             $isCR = (int) (($data['cr'] ?? $item->cr ?? 0) ? 1 : 0);
-            if ($colHasCR && array_key_exists('cr', $data)) $payload['cr'] = $isCR;
+            if ($colHasCR && array_key_exists('cr', $data)) {
+                $payload['cr'] = $isCR;
+            }
 
             if ($colHasVagas) {
                 $payload['vagas_totais'] = $isCR ? 0 : (int) ($data['qtd_total'] ?? $item->vagas_totais ?? 0);
@@ -400,6 +410,7 @@ class VagaController extends Controller
                 ->update($payload);
 
             // cotas
+            $cotasMap = [];
             if (!empty($data['cotas']) && is_array($data['cotas'])) {
                 // valida soma quando não for CR
                 if (!$isCR && isset($payload['vagas_totais'])) {
@@ -412,12 +423,23 @@ class VagaController extends Controller
                 }
 
                 foreach ($data['cotas'] as $tipoId => $qtd) {
+                    $tipoId = (int) $tipoId;
+                    $qtd    = max(0, (int) $qtd);
+                    $cotasMap[$tipoId] = $qtd;
+
                     DB::table('concursos_vagas_cotas')->updateOrInsert(
-                        ['item_id' => $itemId, 'tipo_id' => (int)$tipoId],
-                        ['vagas' => max(0, (int)$qtd), 'updated_at' => now(), 'created_at' => now()]
+                        ['item_id' => $itemId, 'tipo_id' => $tipoId],
+                        ['vagas' => $qtd, 'updated_at' => now(), 'created_at' => now()]
                     );
                 }
             }
+
+            // Atualiza colunas-resumo (qtd_total, qtd_pcds, qtd_negros, qtd_indigenas)
+            $total = $colHasVagas
+                ? ($payload['vagas_totais'] ?? $item->vagas_totais ?? 0)
+                : null;
+
+            $this->syncResumoModalidades($itemId, $total, $cotasMap, (bool)$isCR);
         });
 
         return back()->with('ok', 'Item atualizado.');
@@ -473,15 +495,45 @@ class VagaController extends Controller
             return back()->with('ok', 'Campo de ordem não existe na tabela de itens.');
         }
 
-        $ordens = (array) ($request->input('ordem', []) ?: $request->input('ordens', [])); // aceita 'ordem' ou 'ordens'
-        DB::transaction(function () use ($concurso, $ordens) {
-            foreach ($ordens as $id => $ordem) {
-                $id = (int) $id;
+        // Aceita dois formatos:
+        // 1) ordem[item_id] = pos
+        // 2) ordens[] = item_id // em ordem desejada
+        $ordemAssoc  = (array) $request->input('ordem', []);
+        $ordensLista = (array) $request->input('ordens', []);
+
+        $pares = [];
+
+        if (!empty($ordemAssoc)) {
+            foreach ($ordemAssoc as $id => $ordem) {
+                $id    = (int) $id;
                 $ordem = max(1, (int) $ordem);
+                if ($id > 0) {
+                    $pares[$id] = $ordem;
+                }
+            }
+        } elseif (!empty($ordensLista)) {
+            $pos = 1;
+            foreach ($ordensLista as $id) {
+                $id = (int) $id;
+                if ($id > 0) {
+                    $pares[$id] = $pos++;
+                }
+            }
+        }
+
+        if (empty($pares)) {
+            return back()->with('ok', 'Nada para ordenar.');
+        }
+
+        DB::transaction(function () use ($concurso, $pares) {
+            foreach ($pares as $id => $ordem) {
                 DB::table('concursos_vagas_itens')
                     ->where('concurso_id', $concurso->id)
                     ->where('id', $id)
-                    ->update(['ordem' => $ordem, 'updated_at' => now()]);
+                    ->update([
+                        'ordem'      => $ordem,
+                        'updated_at' => now(),
+                    ]);
             }
         });
 
@@ -777,10 +829,18 @@ class VagaController extends Controller
             }
 
             $isCR = (int) (!empty($loc['cr']) ? 1 : 0);
-            if ($colHasCR)    $itemPayload['cr'] = $isCR;
-            if ($colHasVagas) $itemPayload['vagas_totais'] = $isCR ? 0 : (int) ($loc['qtd_total'] ?? 0);
-            if ($colHasNivelId && isset($data['nivel_id'])) $itemPayload['nivel_id'] = (int) $data['nivel_id'];
-            if ($colHasObs)   $itemPayload['observacao'] = null;
+            if ($colHasCR) {
+                $itemPayload['cr'] = $isCR;
+            }
+            if ($colHasVagas) {
+                $itemPayload['vagas_totais'] = $isCR ? 0 : (int) ($loc['qtd_total'] ?? 0);
+            }
+            if ($colHasNivelId && isset($data['nivel_id'])) {
+                $itemPayload['nivel_id'] = (int) $data['nivel_id'];
+            }
+            if ($colHasObs) {
+                $itemPayload['observacao'] = null;
+            }
 
             return DB::table('concursos_vagas_itens')->insertGetId($itemPayload);
         };
@@ -795,13 +855,14 @@ class VagaController extends Controller
                 }
             }
             foreach ($cotasMap as $tipoId => $qtd) {
-                $tipoId = (int) $tipoId;
-                $qtd = max(0, (int) $qtd);
                 DB::table('concursos_vagas_cotas')->updateOrInsert(
-                    ['item_id' => $itemId, 'tipo_id' => $tipoId],
-                    ['vagas' => $qtd, 'created_at' => now(), 'updated_at' => now()]
+                    ['item_id' => $itemId, 'tipo_id' => (int)$tipoId],
+                    ['vagas' => max(0, (int)$qtd), 'created_at' => now(), 'updated_at' => now()]
                 );
             }
+
+            // Atualiza colunas-resumo de modalidades (qtd_total, qtd_pcds, qtd_negros, qtd_indigenas)
+            $this->syncResumoModalidades($itemId, $total, $cotasMap, $isCR);
         };
 
         // ===== Novo formato: vários locais
@@ -852,5 +913,77 @@ class VagaController extends Controller
         }
 
         throw ValidationException::withMessages(['locais' => 'Informe ao menos um Local.']);
+    }
+
+    /**
+     * Atualiza colunas-resumo de modalidades em concursos_vagas_itens
+     * (qtd_total = ampla, qtd_pcds, qtd_negros, qtd_indigenas)
+     *
+     * NÃO atualiza mais qtd_outros — valores de cotas "diferentes" permanecem apenas
+     * na tabela concursos_vagas_cotas, de forma totalmente dinâmica.
+     */
+    private function syncResumoModalidades(int $itemId, ?int $total, array $cotasMap, bool $isCR = false): void
+    {
+        static $cols = null;
+        static $tipos = null;
+
+        if ($cols === null) {
+            $cols = [
+                'qtd_total'     => Schema::hasColumn('concursos_vagas_itens', 'qtd_total'),
+                'qtd_pcds'      => Schema::hasColumn('concursos_vagas_itens', 'qtd_pcds'),
+                'qtd_negros'    => Schema::hasColumn('concursos_vagas_itens', 'qtd_negros'),
+                'qtd_indigenas' => Schema::hasColumn('concursos_vagas_itens', 'qtd_indigenas'),
+                // NÃO usamos mais qtd_outros
+            ];
+        }
+
+        if (!($cols['qtd_total'] || $cols['qtd_pcds'] || $cols['qtd_negros'] || $cols['qtd_indigenas'])) {
+            return; // nada a fazer
+        }
+
+        if ($tipos === null) {
+            if (Schema::hasTable('tipos_vagas_especiais')) {
+                $tipos = DB::table('tipos_vagas_especiais')->pluck('nome', 'id')->toArray();
+            } else {
+                $tipos = [];
+            }
+        }
+
+        $totalVagas = (!$isCR && $total !== null) ? (int)$total : 0;
+
+        $qtdPcds      = 0;
+        $qtdNegros    = 0;
+        $qtdIndigenas = 0;
+        $qtdOutros    = 0; // só para calcular ampla corretamente
+
+        foreach ($cotasMap as $tipoId => $qtd) {
+            $qtd = max(0, (int)$qtd);
+            $nome = mb_strtolower($tipos[$tipoId] ?? '');
+
+            if (str_contains($nome, 'pcd') || str_contains($nome, 'deficien')) {
+                $qtdPcds += $qtd;
+            } elseif (str_contains($nome, 'negro') || str_contains($nome, 'preto') || str_contains($nome, 'pardo') || str_contains($nome, 'afro')) {
+                $qtdNegros += $qtd;
+            } elseif (str_contains($nome, 'indigen')) {
+                $qtdIndigenas += $qtd;
+            } else {
+                // outras cotas não mapeadas em campos fixos
+                $qtdOutros += $qtd;
+            }
+        }
+
+        $somaCotas = $qtdPcds + $qtdNegros + $qtdIndigenas + $qtdOutros;
+        $qtdAmpla  = max(0, $totalVagas - $somaCotas);
+
+        $update = ['updated_at' => now()];
+        if ($cols['qtd_total'])     $update['qtd_total']     = $qtdAmpla;
+        if ($cols['qtd_pcds'])      $update['qtd_pcds']      = $qtdPcds;
+        if ($cols['qtd_negros'])    $update['qtd_negros']    = $qtdNegros;
+        if ($cols['qtd_indigenas']) $update['qtd_indigenas'] = $qtdIndigenas;
+        // NÃO setamos qtd_outros aqui
+
+        DB::table('concursos_vagas_itens')
+            ->where('id', $itemId)
+            ->update($update);
     }
 }

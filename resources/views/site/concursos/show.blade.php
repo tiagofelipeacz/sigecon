@@ -1,4 +1,3 @@
-{{-- resources/views/site/concursos/show.blade.php --}}
 @extends('layouts.site')
 @section('title', $concurso->titulo ?? 'Concurso')
 
@@ -108,14 +107,19 @@
     })->values();
   }
 
-  // Link do botão "Inscrição Online"
-  if (Route::has('candidato.inscricoes.cargos') && isset($concurso->id)) {
-    $inscricaoUrl = route('candidato.inscricoes.cargos', $concurso->id);
-  } elseif (Route::has('candidato.inscricoes.create')) {
-    $inscricaoUrl = route('candidato.inscricoes.create', ['concurso' => $concurso->id ?? null]);
+  /*
+   * ===== Link do botão "Inscrição Online" =====
+   * Agora sempre tenta ir DIRETO para a tela de nova inscrição,
+   * já com o concurso atual (concurso_id) na query.
+   */
+  if (Route::has('candidato.inscricoes.create') && isset($concurso->id)) {
+    // /candidato/inscricoes/nova?concurso_id=8 (por exemplo)
+    $inscricaoUrl = route('candidato.inscricoes.create', ['concurso_id' => $concurso->id]);
   } elseif (Route::has('candidato.login')) {
+    // fallback: manda para login da área do candidato
     $inscricaoUrl = route('candidato.login');
   } else {
+    // fallback genérico
     $inscricaoUrl = url('/candidato/login');
   }
 

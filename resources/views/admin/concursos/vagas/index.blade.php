@@ -4,7 +4,8 @@
 
 @php
   // Variáveis esperadas do controller:
-  // $concurso (Model), $cargos (Collection), $itens (Collection), $niveis (Collection), $tipos (Collection), $hasOrdemItem (bool), $defaults (array)
+  // $concurso (Model), $cargos (Collection), $itens (Collection),
+  // $niveis (Collection), $tipos (Collection), $hasOrdemItem (bool), $defaults (array)
 
   $cargos       = $cargos ?? collect();
   $itens        = $itens ?? collect();
@@ -81,7 +82,7 @@
             <input type="hidden" name="cargo_id" value="{{ $df['cargo_id'] }}">
           @endif
 
-          {{-- ORDEM SOLICITADA --}}
+          {{-- Cabeçalho do cargo --}}
           <div class="grid g-3">
             <div>
               <label class="tag">Código do Cargo (opcional)</label>
@@ -136,9 +137,11 @@
 
           <div class="hr"></div>
 
+          {{-- LOCALIDADES --}}
           <div class="mb-2" style="font-weight:600">Localidades do Cargo</div>
           <div class="inline-help">
-            Digite o nome da localidade. Se for Cadastro de Reserva (CR), marque a caixa. Se não for CR, informe a quantidade total.
+            Digite o nome da localidade. Se for Cadastro de Reserva (CR), marque a caixa.
+            Se não for CR, informe a quantidade total.
           </div>
 
           <div id="repLocalidades" class="grid" style="gap:12px">
@@ -176,20 +179,22 @@
                 </div>
 
                 @if($tipos->count())
-                <div class="mt-2">
-                  <div class="tag" style="display:block; margin-bottom:6px">Cotas por localidade (opcional)</div>
-                  <div class="grid g-4">
-                    @foreach($tipos as $t)
-                      @php $val = (int) ($map[$t->id] ?? 0); @endphp
-                      <div>
-                        <label class="tag">{{ $t->nome }}</label>
-                        <input type="number" name="locais[{{ $i }}][cotas][{{ $t->id }}]"
-                               value="{{ $val }}" min="0" class="input" />
-                      </div>
-                    @endforeach
+                  <div class="mt-2">
+                    <div class="tag" style="display:block; margin-bottom:6px">Cotas por localidade (opcional)</div>
+                    <div class="grid g-4">
+                      @foreach($tipos as $t)
+                        @php $val = (int) ($map[$t->id] ?? 0); @endphp
+                        <div>
+                          <label class="tag">{{ $t->nome }}</label>
+                          <input type="number" name="locais[{{ $i }}][cotas][{{ $t->id }}]"
+                                 value="{{ $val }}" min="0" class="input" />
+                        </div>
+                      @endforeach
+                    </div>
+                    <div class="inline-help">
+                      A soma das cotas não pode exceder a quantidade total (quando não for CR).
+                    </div>
                   </div>
-                  <div class="inline-help">A soma das cotas não pode exceder a quantidade total (quando não for CR).</div>
-                </div>
                 @endif
 
                 <div class="mt-2" style="display:flex; gap:8px; justify-content:flex-end">
@@ -213,7 +218,8 @@
 
           <div>
             <button class="btn primary" type="submit">
-              <i data-lucide="save"></i> {{ $isEdit ? 'Atualizar Cargo e Localidades' : 'Salvar Cargo e Localidades' }}
+              <i data-lucide="save"></i>
+              {{ $isEdit ? 'Atualizar Cargo e Localidades' : 'Salvar Cargo e Localidades' }}
             </button>
           </div>
         </form>
@@ -260,7 +266,7 @@
                 </td>
                 <td>
                   <div style="display:flex; gap:8px; flex-wrap:wrap">
-                    {{-- Editar cargo (parâmetros nomeados para evitar erro de ordem) --}}
+                    {{-- Editar cargo --}}
                     <a class="btn"
                        href="{{ route('admin.concursos.vagas.edit', ['concurso' => $concurso->id, 'cargo' => $cg->id]) }}">
                       <i data-lucide="pencil"></i> Editar
@@ -271,7 +277,9 @@
                           action="{{ route('admin.concursos.vagas.cargos.destroy', ['concurso'=>$concurso->id, 'cargo'=>$cg->id]) }}"
                           onsubmit="return confirm('Remover cargo e todas as suas localidades?')">
                       @csrf @method('delete')
-                      <button class="btn danger" type="submit"><i data-lucide="trash-2"></i> Remover</button>
+                      <button class="btn danger" type="submit">
+                        <i data-lucide="trash-2"></i> Remover
+                      </button>
                     </form>
                   </div>
                 </td>
@@ -289,13 +297,93 @@
       <div class="gc-body x-scroll">
         <div class="mb-2" style="font-weight:600">Itens de Vaga (Cargo x Localidade)</div>
 
-        <form class="mb-2" method="post" action="{{ route('admin.concursos.vagas.reorder', $concurso) }}">
-          @csrf
-          <div class="inline-help">Edite os números no campo “Ordem” e salve.</div>
+        @if(!$hasOrdemItem)
+          <div class="inline-help" style="margin-bottom:8px; color:#b91c1c;">
+            A coluna <strong>ordem</strong> não existe na tabela <code>concursos_vagas_itens</code>.  
+            Os itens estão sendo listados apenas por cargo e localidade.
+            Se você quiser ordenar manualmente, crie a coluna
+            <code>ordem INT NULL</code> nessa tabela (via migration ou SQL).
+          </div>
+        @endif
+
+        @if($hasOrdemItem)
+          {{-- Formulário para reordenar (quando existir coluna ordem) --}}
+          <form class="mb-2" method="post" action="{{ route('admin.concursos.vagas.reorder', $concurso) }}">
+            @csrf
+            <div class="inline-help">Edite os números no campo “Ordem” e salve.</div>
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th style="width:80px">Ordem</th>
+                  <th>Cargo</th>
+                  <th>Localidade</th>
+                  <th>Qtd.</th>
+                  <th>Jornada</th>
+                  <th>Salário</th>
+                  <th>Taxa</th>
+                  <th class="w-120">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                @forelse($itens as $it)
+                  @php
+                    $cargoNome = $it->cargo_nome ?? ('Cargo #'.$it->cargo_id);
+                    $locNome   = $it->local_nome ?: 'Localidade';
+                  @endphp
+                  <tr>
+                    <td>
+                      <input type="number" name="ordem[{{ $it->id }}]"
+                             value="{{ (int)($it->ordem ?? 0) }}"
+                             class="input" style="width:70px; text-align:right" />
+                    </td>
+                    <td>{{ $cargoNome }}</td>
+                    <td>{{ $locNome }}</td>
+                    <td>{{ (int)($it->quantidade ?? 0) }}</td>
+                    <td>{{ $it->jornada ?? '-' }}</td>
+                    <td>
+                      @php
+                        $sal = $it->salario;
+                        echo $sal !== null && $sal !== ''
+                          ? 'R$ '.number_format((float)$sal, 2, ',', '.')
+                          : '-';
+                      @endphp
+                    </td>
+                    <td>
+                      @php
+                        $tx = $it->valor_inscricao ?? null;
+                        echo $tx !== null && $tx !== ''
+                          ? 'R$ '.number_format((float)$tx, 2, ',', '.')
+                          : '-';
+                      @endphp
+                    </td>
+                    <td>
+                      <form method="post"
+                            action="{{ route('admin.concursos.vagas.itens.destroy', [$concurso, $it->id]) }}"
+                            onsubmit="return confirm('Remover item?')">
+                        @csrf @method('delete')
+                        <button class="btn danger" type="submit">
+                          <i data-lucide="trash-2"></i> Remover
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                @empty
+                  <tr><td colspan="8" class="muted">Sem itens cadastrados.</td></tr>
+                @endforelse
+              </tbody>
+            </table>
+
+            <div class="mt-2">
+              <button class="btn primary" type="submit">
+                <i data-lucide="save"></i> Salvar ordem
+              </button>
+            </div>
+          </form>
+        @else
+          {{-- Versão somente leitura (sem coluna de ordem) --}}
           <table class="table table-sm">
             <thead>
               <tr>
-                <th style="width:80px">Ordem</th>
                 <th>Cargo</th>
                 <th>Localidade</th>
                 <th>Qtd.</th>
@@ -312,10 +400,6 @@
                   $locNome   = $it->local_nome ?: 'Localidade';
                 @endphp
                 <tr>
-                  <td>
-                    <input type="number" name="ordem[{{ $it->id }}]" value="{{ (int)($it->ordem ?? 0) }}"
-                      class="input" style="width:70px; text-align:right" />
-                  </td>
                   <td>{{ $cargoNome }}</td>
                   <td>{{ $locNome }}</td>
                   <td>{{ (int)($it->quantidade ?? 0) }}</td>
@@ -323,35 +407,37 @@
                   <td>
                     @php
                       $sal = $it->salario;
-                      echo $sal !== null && $sal !== '' ? 'R$ '.number_format((float)$sal, 2, ',', '.') : '-';
+                      echo $sal !== null && $sal !== ''
+                        ? 'R$ '.number_format((float)$sal, 2, ',', '.')
+                        : '-';
                     @endphp
                   </td>
                   <td>
                     @php
                       $tx = $it->valor_inscricao ?? null;
-                      echo $tx !== null && $tx !== '' ? 'R$ '.number_format((float)$tx, 2, ',', '.') : '-';
+                      echo $tx !== null && $tx !== ''
+                        ? 'R$ '.number_format((float)$tx, 2, ',', '.')
+                        : '-';
                     @endphp
                   </td>
                   <td>
-                    <form method="post" action="{{ route('admin.concursos.vagas.itens.destroy', [$concurso, $it->id]) }}"
+                    <form method="post"
+                          action="{{ route('admin.concursos.vagas.itens.destroy', [$concurso, $it->id]) }}"
                           onsubmit="return confirm('Remover item?')">
                       @csrf @method('delete')
-                      <button class="btn danger" type="submit"><i data-lucide="trash-2"></i> Remover</button>
+                      <button class="btn danger" type="submit">
+                        <i data-lucide="trash-2"></i> Remover
+                      </button>
                     </form>
                   </td>
                 </tr>
               @empty
-                <tr><td colspan="8" class="muted">Sem itens cadastrados.</td></tr>
+                <tr><td colspan="7" class="muted">Sem itens cadastrados.</td></tr>
               @endforelse
             </tbody>
           </table>
+        @endif
 
-          <div class="mt-2">
-            <button class="btn primary" type="submit">
-              <i data-lucide="save"></i> Salvar ordem
-            </button>
-          </div>
-        </form>
       </div>
     </div>
 
@@ -375,7 +461,8 @@
         <div class="grid g-3">
           <div>
             <label class="tag">Localidade</label>
-            <input type="text" name="locais[\${idx}][local]" class="input" placeholder="Digite o nome da localidade" />
+            <input type="text" name="locais[\${idx}][local]" class="input"
+                   placeholder="Digite o nome da localidade" />
           </div>
 
           <div>

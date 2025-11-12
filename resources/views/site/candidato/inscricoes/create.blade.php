@@ -4,18 +4,74 @@
 @section('title', 'Nova inscrição')
 
 @php
+    use Illuminate\Support\Collection;
+
     $primary = $site['primary_color'] ?? $site['primary'] ?? '#0f172a';
     $accent  = $site['accent_color']  ?? $site['accent']  ?? '#111827';
 
-    // Convenções esperadas do controller:
-    // $modalidadesDisponiveis ou $modalidades  -> lista de modalidades da vaga/concurso (opcional)
-    // $formasPagamento                         -> formas de pagamento configuradas (opcional)
-    // $temIsencao / $tiposIsencao              -> se há algum tipo de isenção no concurso (opcional)
+    // Mapa vindo do controller:
+    // $modalidadesPorCargo["concurso_id|cargo_id"] = [...]
+    $modalidadesPorCargo = $modalidadesPorCargo ?? [];
 
-    $modalidadesLista = $modalidadesDisponiveis ?? $modalidades ?? [];
-    $formasPgLista    = $formasPagamento ?? [];
-    $tiposIsencao     = $tiposIsencao ?? [];
-    $temIsencao       = $temIsencao ?? (!empty($tiposIsencao));
+    $formasPgLista       = $formasPagamento ?? [];
+    $tiposIsencao        = $tiposIsencao ?? [];
+    $temIsencao          = $temIsencao ?? (!empty($tiposIsencao));
+
+    // Mapa de condições especiais por concurso (se o controller estiver enviando)
+    $condicoesEspeciaisMap = $condicoesEspeciaisMap
+        ?? $condicoesEspeciaisPorConcurso
+        ?? $condicoesEspeciais
+        ?? [];
+
+    // Lista de concursos que o controller envia
+    /** @var \Illuminate\Support\Collection|array $concursos */
+    $concursos      = $concursos ?? collect();
+    $concursosCount = $concursos instanceof Collection ? $concursos->count() : (is_array($concursos) ? count($concursos) : 0);
+
+    // Concurso passado explicitamente (por ex. ao clicar em "INSCRIÇÃO ONLINE")
+    $concursoFromCtrl = $concursoSelecionado->id ?? null;              // se o controller mandar um objeto
+    $concursoFromReq  = request()->get('concurso_id')
+                        ?? request()->get('concurso');                 // parâmetro da rota/query
+
+    // ID efetivamente selecionado
+    $selectedConcursoId = old('concurso_id')
+        ?? $concursoFromCtrl
+        ?? $concursoFromReq;
+
+    // Se não veio nada e só tiver 1 concurso na lista, usa ele
+    if (!$selectedConcursoId && $concursosCount === 1) {
+        $first = $concursos instanceof Collection ? $concursos->first() : (is_array($concursos) ? reset($concursos) : null);
+        if ($first && isset($first->id)) {
+            $selectedConcursoId = $first->id;
+        }
+    }
+
+    // Quando já temos um concurso definido, não mostramos dropdown
+    $concursoTravado = (bool) $selectedConcursoId;
+
+    // Nome do concurso travado (para exibir em modo leitura)
+    $concursoNomeTravado = null;
+    if ($concursoTravado && $concursosCount > 0) {
+        $cObj = null;
+
+        if ($concursos instanceof Collection) {
+            $cObj = $concursos->firstWhere('id', $selectedConcursoId) ?? $concursos->first();
+        } elseif (is_array($concursos)) {
+            foreach ($concursos as $c) {
+                if (isset($c->id) && (string)$c->id === (string)$selectedConcursoId) {
+                    $cObj = $c;
+                    break;
+                }
+            }
+            if (!$cObj) {
+                $cObj = reset($concursos);
+            }
+        }
+
+        if ($cObj) {
+            $concursoNomeTravado = $cObj->titulo ?? $cObj->nome ?? ('Concurso #'.$cObj->id);
+        }
+    }
 @endphp
 
 @section('content')
@@ -149,6 +205,11 @@
         background:#f9fafb;
         font-family:inherit;
     }
+    .c-input--static{
+        background:#f9fafb;
+        border-style:dashed;
+        cursor:default;
+    }
     .c-input:focus, .c-select:focus, .c-textarea:focus{
         outline:none;
         border-color:var(--c-primary);
@@ -201,6 +262,13 @@
         margin-top:2px;
     }
 
+    .c-condicoes-opcoes{
+        display:flex;
+        flex-direction:column;
+        gap:4px;
+        margin-bottom:6px;
+    }
+
     @media (max-width: 840px){
         .c-page{
             padding-top:20px;
@@ -223,7 +291,7 @@
                 <div class="c-kicker">Área do Candidato</div>
                 <h1 class="c-title">Nova inscrição</h1>
                 <p class="c-sub">
-                    Selecione o concurso, o cargo desejado, a cidade de prova e informe,
+                    Selecione o cargo desejado, a cidade de prova e informe,
                     se for o caso, modalidade, condições especiais e isenção (quando disponíveis).
                 </p>
             </div>
@@ -254,17 +322,42 @@
                     {{-- Concurso --}}
                     <div class="c-field">
                         <label class="c-label" for="concurso_id">Concurso</label>
-                        <select name="concurso_id" id="concurso_id" class="c-select" required>
-                            <option value="">Selecione...</option>
-                            @foreach($concursos as $conc)
-                                <option value="{{ $conc->id }}" {{ old('concurso_id') == $conc->id ? 'selected' : '' }}>
-                                    {{ $conc->titulo ?? $conc->nome ?? ('Concurso #'.$conc->id) }}
+
+                        @if($concursoTravado && $selectedConcursoId && $concursoNomeTravado)
+                            {{-- Exibição somente leitura (sem dropdown visual) --}}
+                            <div class="c-input c-input--static">
+                                {{ $concursoNomeTravado }}
+                            </div>
+
+                            {{-- Hidden REAL para o POST --}}
+                            <input type="hidden" name="concurso_id" value="{{ $selectedConcursoId }}">
+
+                            {{-- Select escondido só para o JS (change, fetch cargos, etc.) --}}
+                            <select id="concurso_id" class="c-select" style="display:none;">
+                                <option value="{{ $selectedConcursoId }}" selected>
+                                    {{ $concursoNomeTravado }}
                                 </option>
-                            @endforeach
-                        </select>
-                        <div class="c-help">
-                            Apenas concursos com inscrições online e período vigente são exibidos.
-                        </div>
+                            </select>
+
+                            <div class="c-help">
+                                Você está realizando a inscrição neste concurso.
+                            </div>
+                        @else
+                            {{-- Modo “livre” (sem concurso pré-definido) --}}
+                            <select name="concurso_id" id="concurso_id" class="c-select" required>
+                                <option value="">Selecione...</option>
+                                @foreach($concursos as $conc)
+                                    <option value="{{ $conc->id }}"
+                                        {{ (string)$selectedConcursoId === (string)$conc->id ? 'selected' : '' }}>
+                                        {{ $conc->titulo ?? $conc->nome ?? ('Concurso #'.$conc->id) }}
+                                    </option>
+                                @endforeach
+                            </select>
+                            <div class="c-help">
+                                Apenas concursos com inscrições online e período vigente são exibidos.
+                            </div>
+                        @endif
+
                         @error('concurso_id')
                         <div class="c-error">{{ $message }}</div>
                         @enderror
@@ -284,79 +377,83 @@
                         @enderror
                     </div>
 
-                    {{-- Localidade (Cidade de prova) --}}
-                    <div class="c-field">
-                        <label class="c-label" for="item_id">Cidade / local de prova (quando houver)</label>
-                        <select name="item_id" id="item_id" class="c-select">
+                    {{-- Localidade (Cidade / local de prova vinculado ao cargo) --}}
+                    <div class="c-field" id="field_item">
+                        <label class="c-label" for="item_id">Localidade</label>
+                        <select name="item_id" id="item_id" class="c-select" required>
                             <option value="">Selecione o cargo...</option>
                         </select>
                         <div class="c-help">
-                            Quando o concurso tiver cidades de prova, elas aparecerão aqui.
+                            Quando o cargo tiver localidades/cidades vinculadas,
+                            é obrigatório selecionar uma delas.
                         </div>
                         @error('item_id')
                         <div class="c-error">{{ $message }}</div>
                         @enderror
                     </div>
 
-                    {{-- Modalidade (dinâmica a partir da configuração do concurso / vaga) --}}
+                    {{-- Cidade de prova (configurada no concurso, independente do cargo) --}}
+                    <div class="c-field" id="field_cidade_prova" style="display:none;">
+                        <label class="c-label" for="cidade_prova">Cidade de prova</label>
+                        <select name="cidade_prova" id="cidade_prova" class="c-select">
+                            <option value="">Selecione o concurso...</option>
+                        </select>
+                        <div class="c-help">
+                            As cidades de prova são exibidas de acordo com a configuração deste concurso.
+                        </div>
+                        @error('cidade_prova')
+                        <div class="c-error">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    {{-- Modalidade (dinâmica a partir das vagas do concurso/cargo) --}}
                     <div class="c-field">
                         <label class="c-label" for="modalidade">Modalidade de concorrência</label>
 
-                        @if(!empty($modalidadesLista) && count($modalidadesLista))
-                            <select name="modalidade" id="modalidade" class="c-select">
-                                <option value="">Selecione...</option>
-                                @foreach($modalidadesLista as $mod)
-                                    @php
-                                        // Tenta descobrir valor e rótulo com nomes genéricos
-                                        $value = $mod->codigo
-                                            ?? $mod->slug
-                                            ?? $mod->id
-                                            ?? ($mod['codigo'] ?? $mod['slug'] ?? $mod['id'] ?? null);
-
-                                        $label = $mod->nome
-                                            ?? $mod->descricao
-                                            ?? ($mod['nome'] ?? $mod['descricao'] ?? $value);
-                                    @endphp
-                                    @if($value)
-                                        <option value="{{ $value }}" {{ old('modalidade') == $value ? 'selected' : '' }}>
-                                            {{ $label }}
-                                        </option>
-                                    @endif
-                                @endforeach
-                            </select>
-                            <div class="c-help">
-                                As modalidades acima foram configuradas para este concurso/cargo.
-                                Se tiver dúvidas, consulte o edital.
-                            </div>
-                        @else
-                            {{-- Sem modalidades configuradas: padrão ampla concorrência --}}
-                            <input type="hidden" name="modalidade" value="{{ old('modalidade', 'ampla') }}">
-                            <div class="c-help">
-                                Este concurso não possui modalidades diferenciadas configuradas.
-                                A inscrição será considerada em <strong>ampla concorrência</strong>.
-                            </div>
-                        @endif
+                        <select name="modalidade" id="modalidade" class="c-select" required>
+                            <option value="">
+                                Selecione o concurso e o cargo...
+                            </option>
+                        </select>
+                        <div class="c-help">
+                            As modalidades (Ampla concorrência, PcD, cotas para negros, idosos, etc.)
+                            são exibidas conforme as vagas especiais configuradas para aquele cargo no concurso.
+                        </div>
 
                         @error('modalidade')
                         <div class="c-error">{{ $message }}</div>
                         @enderror
                     </div>
 
-                    {{-- Condições especiais --}}
-                    <div class="c-field">
-                        <label class="c-label" for="condicoes_especiais">Condições especiais</label>
+                    {{-- Condições especiais (dinâmicas por concurso) --}}
+                    <div class="c-field" id="field_condicoes_especiais" style="display:none;">
+                        <label class="c-label">Condições especiais</label>
+
+                        <div id="condicoes_especiais_opcoes" class="c-condicoes-opcoes">
+                            {{-- checkboxes gerados via JS --}}
+                        </div>
+
                         <textarea
                             name="condicoes_especiais"
                             id="condicoes_especiais"
                             class="c-textarea"
-                            placeholder="Descreva se precisa de atendimento especial, recursos de acessibilidade ou outras condições previstas em edital."
+                            placeholder="Descreva detalhes adicionais sobre o atendimento especial ou recursos de acessibilidade, se necessário."
                         >{{ old('condicoes_especiais') }}</textarea>
+
+                        <div class="c-help">
+                            Marque as condições especiais disponíveis para este concurso e,
+                            se precisar, complemente com uma descrição.
+                        </div>
+
                         @error('condicoes_especiais')
+                        <div class="c-error">{{ $message }}</div>
+                        @enderror
+                        @error('condicoes_especiais_opcoes')
                         <div class="c-error">{{ $message }}</div>
                         @enderror
                     </div>
 
-                    {{-- Isenção (só aparece se o concurso tiver tipo de isenção configurado) --}}
+                    {{-- Isenção (só aparece se $temIsencao = true) --}}
                     @if($temIsencao)
                         <div class="c-field">
                             <div class="c-checkbox-row">
@@ -454,15 +551,33 @@
     </div>
 </div>
 
-{{-- Scripts para carregar cargos e localidades via AJAX --}}
+{{-- Scripts para carregar cargos, localidades, cidades de prova, condições especiais e modalidades via AJAX --}}
 @push('scripts')
 <script>
     (function(){
-        const selectConcurso   = document.getElementById('concurso_id');
-        const selectCargo      = document.getElementById('cargo_id');
-        const selectItem       = document.getElementById('item_id');
+        const selectConcurso      = document.getElementById('concurso_id');
+        const selectCargo         = document.getElementById('cargo_id');
+        const selectItem          = document.getElementById('item_id');
+        const selectModalidade    = document.getElementById('modalidade');
+        const fieldItemWrapper    = document.getElementById('field_item');
+
+        const fieldCidadeProva    = document.getElementById('field_cidade_prova');
+        const selectCidadeProva   = document.getElementById('cidade_prova');
+
+        const fieldCondicoesEsp   = document.getElementById('field_condicoes_especiais');
+        const wrapCondicoesOpcoes = document.getElementById('condicoes_especiais_opcoes');
+
+        const modalidadesPorCargo     = @json($modalidadesPorCargo);
+        const condicoesEspeciaisMap   = @json($condicoesEspeciaisMap);
+
+        const oldModalidade       = @json(old('modalidade'));
+        const oldCidadeProva      = @json(old('cidade_prova'));
+        const oldItemId           = @json(old('item_id'));
+        const oldCondicoesOpcoes  = @json(old('condicoes_especiais_opcoes', []));
+        const fixedConcursoId     = @json($selectedConcursoId);
 
         function clearSelect(select, placeholder){
+            if (!select) return;
             select.innerHTML = '';
             const opt = document.createElement('option');
             opt.value = '';
@@ -470,63 +585,290 @@
             select.appendChild(opt);
         }
 
-        // Quando troca o concurso, carrega cargos
-        selectConcurso.addEventListener('change', function(){
-            const concursoId = this.value;
-            clearSelect(selectCargo, 'Carregando cargos...');
-            clearSelect(selectItem, 'Selecione o cargo...');
+        function toggleField(el, show){
+            if (!el) return;
+            el.style.display = show ? '' : 'none';
+        }
 
-            if(!concursoId){
-                clearSelect(selectCargo, 'Selecione primeiro o concurso...');
+        function preencherModalidades(concursoId, cargoId){
+            if (!selectModalidade) return;
+
+            const key = (concursoId && cargoId) ? (concursoId + '|' + cargoId) : null;
+
+            let lista = key && modalidadesPorCargo[key]
+                ? modalidadesPorCargo[key]
+                : null;
+
+            // Fallback: se não achar nada, usa "Ampla concorrência"
+            if (!lista || Object.keys(lista).length === 0) {
+                lista = { 'Ampla concorrência': 'Ampla concorrência' };
+            }
+
+            clearSelect(selectModalidade, 'Selecione...');
+
+            Object.entries(lista).forEach(([value, label]) => {
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.textContent = label;
+                if (oldModalidade && oldModalidade === value) {
+                    opt.selected = true;
+                }
+                selectModalidade.appendChild(opt);
+            });
+        }
+
+        /**
+         * Preenche as condições especiais de forma dinâmica a partir do mapa
+         * condicoesEspeciaisMap[concursoId] = [{value, label}, ...]
+         */
+        function preencherCondicoesEspeciais(concursoId){
+            if (!fieldCondicoesEsp || !wrapCondicoesOpcoes) return;
+
+            wrapCondicoesOpcoes.innerHTML = '';
+
+            if (!concursoId || !condicoesEspeciaisMap || !condicoesEspeciaisMap[concursoId] || !condicoesEspeciaisMap[concursoId].length) {
+                toggleField(fieldCondicoesEsp, false);
                 return;
             }
 
-            fetch("{{ url('candidato/inscricoes/cargos') }}/" + concursoId)
-                .then(resp => resp.json())
-                .then(data => {
-                    clearSelect(selectCargo, 'Selecione...');
-                    data.forEach(c => {
-                        const opt = document.createElement('option');
-                        opt.value = c.id;
-                        opt.textContent = c.nome || ('Cargo #' + c.id);
-                        selectCargo.appendChild(opt);
-                    });
-                })
-                .catch(() => {
-                    clearSelect(selectCargo, 'Erro ao carregar cargos');
-                });
-        });
+            const lista = condicoesEspeciaisMap[concursoId];
 
-        // Quando troca o cargo, carrega localidades (itens)
-        selectCargo.addEventListener('change', function(){
-            const concursoId = selectConcurso.value;
-            const cargoId    = this.value;
-            clearSelect(selectItem, 'Carregando localidades...');
+            lista.forEach((raw) => {
+                const value = raw.value || raw.codigo || raw.slug || raw.id || raw;
+                const label = raw.label || raw.nome || raw.descricao || String(value);
 
-            if(!concursoId || !cargoId){
-                clearSelect(selectItem, 'Selecione o cargo...');
+                if (!value || !label) return;
+
+                const inputId = 'cond_esp_' + concursoId + '_' + value;
+
+                const wrapper = document.createElement('label');
+                wrapper.className = 'c-checkbox-row';
+                wrapper.setAttribute('for', inputId);
+
+                const cb = document.createElement('input');
+                cb.type  = 'checkbox';
+                cb.id    = inputId;
+                cb.name  = 'condicoes_especiais_opcoes[]';
+                cb.value = label;
+
+                if (Array.isArray(oldCondicoesOpcoes) && oldCondicoesOpcoes.includes(label)) {
+                    cb.checked = true;
+                }
+
+                const span = document.createElement('span');
+                span.textContent = label;
+
+                wrapper.appendChild(cb);
+                wrapper.appendChild(span);
+
+                wrapCondicoesOpcoes.appendChild(wrapper);
+            });
+
+            toggleField(fieldCondicoesEsp, true);
+        }
+
+        /**
+         * Carrega cidades de prova dinâmicas via endpoint:
+         *   GET candidato/inscricoes/cidades/{concursoId}/{cargoId?}
+         */
+        function carregarCidadesProva(concursoId, cargoId){
+            if (!selectCidadeProva || !fieldCidadeProva) return;
+
+            if (!concursoId) {
+                clearSelect(selectCidadeProva, 'Selecione o concurso...');
+                toggleField(fieldCidadeProva, false);
                 return;
             }
 
-            fetch("{{ url('candidato/inscricoes/localidades') }}/" + concursoId + "/" + cargoId)
+            let url = "{{ url('candidato/inscricoes/cidades') }}/" + concursoId;
+            if (cargoId) {
+                url += "/" + cargoId;
+            }
+
+            clearSelect(selectCidadeProva, 'Carregando cidades de prova...');
+
+            fetch(url)
                 .then(resp => resp.json())
                 .then(data => {
-                    clearSelect(selectItem, 'Selecione (opcional)...');
-                    if(!data || !data.length){
-                        selectItem.options[0].textContent = 'Não há cidades específicas para este cargo';
+                    if (!data || !data.length) {
+                        clearSelect(selectCidadeProva, 'Nenhuma cidade de prova configurada para este concurso');
+                        toggleField(fieldCidadeProva, false);
                         return;
                     }
-                    data.forEach(i => {
+
+                    clearSelect(selectCidadeProva, 'Selecione...');
+                    data.forEach(c => {
+                        const label = c.label
+                            || (c.cidade + (c.uf ? ' / ' + c.uf : ''))
+                            || c.cidade
+                            || '';
+
+                        if (!label) return;
+
+                        const value = label;
+
                         const opt = document.createElement('option');
-                        opt.value = i.item_id;
-                        opt.textContent = i.localidade_nome || ('Item #' + i.item_id);
-                        selectItem.appendChild(opt);
+                        opt.value = value;
+                        opt.textContent = label;
+
+                        if (oldCidadeProva && oldCidadeProva === value) {
+                            opt.selected = true;
+                        }
+
+                        selectCidadeProva.appendChild(opt);
                     });
+
+                    toggleField(fieldCidadeProva, true);
                 })
                 .catch(() => {
-                    clearSelect(selectItem, 'Erro ao carregar localidades');
+                    clearSelect(selectCidadeProva, 'Erro ao carregar cidades de prova');
+                    toggleField(fieldCidadeProva, false);
                 });
+        }
+
+        // Quando troca o concurso, carrega cargos, cidades de prova e condições especiais
+        if (selectConcurso) {
+            selectConcurso.addEventListener('change', function(){
+                const concursoId = this.value;
+
+                clearSelect(selectCargo, 'Carregando cargos...');
+                clearSelect(selectItem, 'Selecione o cargo...');
+                if (selectItem) selectItem.required = false;
+
+                clearSelect(selectModalidade, 'Selecione o concurso e o cargo...');
+                clearSelect(selectCidadeProva, 'Selecione o concurso...');
+
+                toggleField(fieldItemWrapper, true);
+                toggleField(fieldCidadeProva, false);
+
+                // limpa/oculta condições especiais
+                preencherCondicoesEspeciais(null);
+
+                if(!concursoId){
+                    clearSelect(selectCargo, 'Selecione primeiro o concurso...');
+                    return;
+                }
+
+                // Cargos
+                fetch("{{ url('candidato/inscricoes/cargos') }}/" + concursoId)
+                    .then(resp => resp.json())
+                    .then(data => {
+                        clearSelect(selectCargo, 'Selecione...');
+                        data.forEach(c => {
+                            const opt = document.createElement('option');
+                            opt.value = c.id;
+                            opt.textContent = c.nome || ('Cargo #' + c.id);
+                            selectCargo.appendChild(opt);
+                        });
+                    })
+                    .catch(() => {
+                        clearSelect(selectCargo, 'Erro ao carregar cargos');
+                    });
+
+                // Cidades de prova (por concurso, sem filtro de cargo ainda)
+                carregarCidadesProva(concursoId, null);
+
+                // Condições especiais (por concurso)
+                preencherCondicoesEspeciais(concursoId);
+            });
+        }
+
+        // Quando troca o cargo, carrega localidades (itens), modalidades e refina cidades de prova
+        if (selectCargo) {
+            selectCargo.addEventListener('change', function(){
+                const concursoId = selectConcurso ? selectConcurso.value : null;
+                const cargoId    = this.value;
+
+                clearSelect(selectItem, 'Carregando localidades...');
+                if (selectItem) selectItem.required = false;
+
+                clearSelect(selectModalidade, 'Carregando modalidades...');
+                toggleField(fieldItemWrapper, true);
+
+                if(!concursoId || !cargoId){
+                    clearSelect(selectItem, 'Selecione o cargo...');
+                    if (selectItem) selectItem.required = false;
+
+                    clearSelect(selectModalidade, 'Selecione o concurso e o cargo...');
+                    toggleField(fieldItemWrapper, false);
+                    carregarCidadesProva(concursoId, null);
+                    return;
+                }
+
+                // Localidades (itens)
+                fetch("{{ url('candidato/inscricoes/localidades') }}/" + concursoId + "/" + cargoId)
+                    .then(resp => resp.json())
+                    .then(data => {
+                        if(!data || !data.length){
+                            clearSelect(selectItem, 'Não há localidades cadastradas para este cargo');
+                            if (selectItem) selectItem.required = false;
+                            toggleField(fieldItemWrapper, false);
+                            return;
+                        }
+
+                        if (data.length > 1) {
+                            // Mais de uma localidade: exibe o campo para o candidato escolher (OBRIGATÓRIO)
+                            clearSelect(selectItem, 'Selecione...');
+                            data.forEach(i => {
+                                const opt = document.createElement('option');
+                                opt.value = i.item_id;
+                                opt.textContent = i.localidade_nome || ('Item #' + i.item_id);
+                                if (oldItemId && String(oldItemId) === String(i.item_id)) {
+                                    opt.selected = true;
+                                }
+                                selectItem.appendChild(opt);
+                            });
+                            if (selectItem) selectItem.required = true;
+                            toggleField(fieldItemWrapper, true);
+                        } else {
+                            // Apenas uma localidade: seleciona automaticamente (continua obrigatório, mas já vem preenchido)
+                            clearSelect(selectItem, 'Única localidade disponível');
+                            const unico = data[0];
+                            const opt = document.createElement('option');
+                            opt.value = unico.item_id;
+                            opt.textContent = unico.localidade_nome || ('Item #' + unico.item_id);
+                            opt.selected = true;
+                            selectItem.appendChild(opt);
+
+                            if (selectItem) selectItem.required = true;
+                            // Pode ocultar o campo, já que há uma única opção
+                            toggleField(fieldItemWrapper, false);
+                        }
+                    })
+                    .catch(() => {
+                        clearSelect(selectItem, 'Erro ao carregar localidades');
+                        if (selectItem) selectItem.required = false;
+                        toggleField(fieldItemWrapper, false);
+                    });
+
+                // Modalidades para este (concurso, cargo)
+                preencherModalidades(concursoId, cargoId);
+
+                // Cidades de prova refinadas por cargo (quando houver vínculo em concursos_cidades_cargos)
+                carregarCidadesProva(concursoId, cargoId);
+            });
+        }
+
+        // Se veio old('concurso_id') ou um concurso fixo (INSCRIÇÃO ONLINE), dispara change inicial
+        document.addEventListener('DOMContentLoaded', function () {
+            const oldConcurso = @json(old('concurso_id'));
+            const oldCargo    = @json(old('cargo_id'));
+
+            const initialConcurso = oldConcurso || fixedConcursoId;
+
+            if (selectConcurso && initialConcurso) {
+                selectConcurso.value = initialConcurso;
+                selectConcurso.dispatchEvent(new Event('change'));
+
+                if (oldCargo) {
+                    setTimeout(() => {
+                        selectCargo.value = oldCargo;
+                        selectCargo.dispatchEvent(new Event('change'));
+                    }, 400);
+                }
+            }
         });
+
     })();
 </script>
 @endpush

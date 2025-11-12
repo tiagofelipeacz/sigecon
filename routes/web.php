@@ -514,9 +514,21 @@ Route::prefix('candidato')->name('candidato.')->group(function () {
 
         // Inscrições
         Route::get('/inscricoes', [CandidatoInscricaoController::class, 'index'])->name('inscricoes.index');
-        Route::get('/inscricoes/nova', [CandidatoInscricaoController::class, 'create'])->name('inscricoes.create');
-        Route::get('/inscricoes/cargos/{concurso}', [CandidatoInscricaoController::class, 'cargos'])->name('inscricoes.cargos');
-        Route::get('/inscricoes/localidades/{concurso}/{cargo}', [CandidatoInscricaoController::class, 'localidades'])->name('inscricoes.localidades');
+
+        // <<< AJUSTE: concurso opcional na criação
+        Route::get('/inscricoes/nova/{concurso?}', [CandidatoInscricaoController::class, 'create'])
+            ->name('inscricoes.create');
+
+        Route::get('/inscricoes/cargos/{concurso}', [CandidatoInscricaoController::class, 'cargos'])
+            ->name('inscricoes.cargos');
+
+        // <<< NOVO: cidades de prova (por concurso e opcionalmente cargo)
+        Route::get('/inscricoes/cidades/{concurso}/{cargo?}', [CandidatoInscricaoController::class, 'cidadesProva'])
+            ->name('inscricoes.cidades');
+
+        Route::get('/inscricoes/localidades/{concurso}/{cargo}', [CandidatoInscricaoController::class, 'localidades'])
+            ->name('inscricoes.localidades');
+
         Route::post('/inscricoes', [CandidatoInscricaoController::class, 'store'])->name('inscricoes.store');
         Route::get('/inscricoes/{id}', [CandidatoInscricaoController::class, 'show'])->name('inscricoes.show');
         Route::get('/inscricoes/{id}/comprovante', [CandidatoInscricaoController::class, 'comprovante'])->name('inscricoes.comprovante');

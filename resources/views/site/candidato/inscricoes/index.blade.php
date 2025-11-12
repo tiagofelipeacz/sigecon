@@ -266,9 +266,10 @@
                 </p>
             </div>
 
-            <a href="{{ route('candidato.inscricoes.create') }}" class="c-insc-btn-new">
-                + Nova inscrição
-            </a>
+                 <a href="{{ route('site.concursos.index') }}" class="btn btn-primary">
+                 + Nova inscrição
+                </a>
+
         </div>
 
         {{-- Mensagens de sucesso/erro --}}

@@ -44,6 +44,9 @@
         $statusLabel = strtoupper($insc->status ?? 'indefinido');
         $statusClass = 'c-insc-badge-outro';
     }
+
+    // Modalidade: usa exatamente o texto salvo na inscrição
+    $modalidadeInscricao = $insc->modalidade ?: 'Ampla concorrência';
 @endphp
 
 @section('content')
@@ -360,7 +363,7 @@
                         <li>
                             <div class="c-def-item-label">Modalidade</div>
                             <div class="c-def-item-value">
-                                {{ strtoupper($insc->modalidade ?? 'ampla') }}
+                                {{ $modalidadeInscricao }}
                             </div>
                         </li>
                         <li>
