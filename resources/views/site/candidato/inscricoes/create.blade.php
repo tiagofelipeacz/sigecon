@@ -258,15 +258,32 @@
         gap:8px;
         font-size:13px;
     }
-    .c-checkbox-row input[type="checkbox"]{
+    .c-checkbox-row input[type="checkbox"],
+    .c-checkbox-row input[type="radio"]{
         margin-top:2px;
+    }
+
+    .c-radio-group{
+        display:flex;
+        gap:16px;
+        margin:4px 0 4px;
     }
 
     .c-condicoes-opcoes{
         display:flex;
         flex-direction:column;
-        gap:4px;
+        gap:6px;
         margin-bottom:6px;
+    }
+
+    .c-note{
+        font-size:12px;
+        color:#0f172a;
+        background:#f1f5f9;
+        border:1px dashed var(--c-border);
+        border-radius:10px;
+        padding:8px 10px;
+        display:none;
     }
 
     @media (max-width: 840px){
@@ -425,36 +442,52 @@
                         @enderror
                     </div>
 
-                    {{-- Condições especiais (dinâmicas por concurso) --}}
-                    <div class="c-field" id="field_condicoes_especiais" style="display:none;">
-                        <label class="c-label">Condições especiais</label>
+                    {{-- Pergunta + Condições especiais (dinâmicas por concurso) --}}
+                    <div class="c-field">
+                        <label class="c-label">Desejo solicitar condições especiais</label>
 
-                        <div class="c-help" style="margin-bottom:4px;">
-                            Desejo solicitar condições especiais para a realização da prova, conforme previsto no edital.
+                        <div class="c-radio-group" id="grupo_radio_condicoes">
+                            @php
+                                $oldQuer = old('quer_condicoes_especiais', null);
+                                $querSim = (string)$oldQuer === '1';
+                                $querNao = $oldQuer === null ? true : ((string)$oldQuer === '0');
+                            @endphp
+                            <label class="c-checkbox-row" for="quer_condicoes_0">
+                                <input type="radio" name="quer_condicoes_especiais" id="quer_condicoes_0" value="0" {{ $querNao ? 'checked' : '' }}>
+                                <span>Não</span>
+                            </label>
+                            <label class="c-checkbox-row" for="quer_condicoes_1">
+                                <input type="radio" name="quer_condicoes_especiais" id="quer_condicoes_1" value="1" {{ $querSim ? 'checked' : '' }}>
+                                <span>Sim</span>
+                            </label>
                         </div>
 
-                        <div id="condicoes_especiais_opcoes" class="c-condicoes-opcoes">
-                            {{-- checkboxes gerados via JS --}}
+                        {{-- Bloco que aparece apenas quando escolher "Sim" --}}
+                        <div id="field_condicoes_especiais" style="display:none; margin-top:8px;">
+                            <div id="condicoes_especiais_opcoes" class="c-condicoes-opcoes">
+                                {{-- checkboxes gerados via JS --}}
+                            </div>
+
+                            <textarea
+                                name="condicoes_especiais"
+                                id="condicoes_especiais"
+                                class="c-textarea"
+                                placeholder="Descreva detalhes adicionais sobre o atendimento especial ou recursos de acessibilidade, se necessário."
+                            >{{ old('condicoes_especiais') }}</textarea>
+
+                            <div id="aviso_laudo" class="c-note" style="margin-top:8px;"></div>
+
+                            <div class="c-help" style="margin-top:6px;">
+                                Marque as condições especiais disponíveis para este concurso e, se precisar, complemente com uma descrição.
+                            </div>
+
+                            @error('condicoes_especiais')
+                            <div class="c-error">{{ $message }}</div>
+                            @enderror
+                            @error('condicoes_especiais_opcoes')
+                            <div class="c-error">{{ $message }}</div>
+                            @enderror
                         </div>
-
-                        <textarea
-                            name="condicoes_especiais"
-                            id="condicoes_especiais"
-                            class="c-textarea"
-                            placeholder="Descreva detalhes adicionais sobre o atendimento especial ou recursos de acessibilidade, se necessário."
-                        >{{ old('condicoes_especiais') }}</textarea>
-
-                        <div class="c-help">
-                            Marque as condições especiais disponíveis para este concurso e,
-                            se precisar, complemente com uma descrição.
-                        </div>
-
-                        @error('condicoes_especiais')
-                        <div class="c-error">{{ $message }}</div>
-                        @enderror
-                        @error('condicoes_especiais_opcoes')
-                        <div class="c-error">{{ $message }}</div>
-                        @enderror
                     </div>
 
                     {{-- Isenção (só aparece se $temIsencao = true) --}}
@@ -568,16 +601,22 @@
         const fieldCidadeProva    = document.getElementById('field_cidade_prova');
         const selectCidadeProva   = document.getElementById('cidade_prova');
 
+        // Radio SIM/NÃO para condições
+        const radioNao            = document.getElementById('quer_condicoes_0');
+        const radioSim            = document.getElementById('quer_condicoes_1');
         const fieldCondicoesEsp   = document.getElementById('field_condicoes_especiais');
         const wrapCondicoesOpcoes = document.getElementById('condicoes_especiais_opcoes');
+        const txtCondicoes        = document.getElementById('condicoes_especiais');
+        const avisoLaudo          = document.getElementById('aviso_laudo');
 
-        const modalidadesPorCargo     = @json($modalidadesPorCargo);
-        const condicoesEspeciaisMap   = @json($condicoesEspeciaisMap);
+        const modalidadesPorCargo   = @json($modalidadesPorCargo);
+        const condicoesEspeciaisMap = @json($condicoesEspeciaisMap);
 
         const oldModalidade       = @json(old('modalidade'));
         const oldCidadeProva      = @json(old('cidade_prova'));
         const oldItemId           = @json(old('item_id'));
         const oldCondicoesOpcoes  = @json(old('condicoes_especiais_opcoes', []));
+        const oldQuerCond         = @json(old('quer_condicoes_especiais', '0'));
         const fixedConcursoId     = @json($selectedConcursoId);
 
         function clearSelect(select, placeholder){
@@ -589,9 +628,15 @@
             select.appendChild(opt);
         }
 
-        function toggleField(el, show){
+        function toggle(el, show){
             if (!el) return;
             el.style.display = show ? '' : 'none';
+        }
+
+        function setRequired(el, must){
+            if (!el) return;
+            if (must) el.setAttribute('required', 'required');
+            else el.removeAttribute('required');
         }
 
         function preencherModalidades(concursoId, cargoId){
@@ -623,23 +668,28 @@
 
         /**
          * Preenche as condições especiais de forma dinâmica a partir do mapa
-         * condicoesEspeciaisMap[concursoId] = [{value, label}, ...]
+         * condicoesEspeciaisMap[concursoId] = [{id, label, exibir_observacoes, precisa_laudo, laudo_obrigatorio}, ...]
          */
         function preencherCondicoesEspeciais(concursoId){
-            if (!fieldCondicoesEsp || !wrapCondicoesOpcoes) return;
+            if (!wrapCondicoesOpcoes) return;
 
             wrapCondicoesOpcoes.innerHTML = '';
 
             if (!concursoId || !condicoesEspeciaisMap || !condicoesEspeciaisMap[concursoId] || !condicoesEspeciaisMap[concursoId].length) {
-                toggleField(fieldCondicoesEsp, false);
+                toggle(fieldCondicoesEsp, false);
                 return;
             }
 
             const lista = condicoesEspeciaisMap[concursoId];
 
             lista.forEach((raw) => {
-                const value = raw.value || raw.codigo || raw.slug || raw.id || raw;
+                const value = raw.value || raw.id || raw.codigo || raw.slug || raw;
                 const label = raw.label || raw.nome || raw.descricao || String(value);
+
+                // flags vindos do controller (fallback para 0)
+                const precisaObs   = Number(raw.exibir_observacoes || raw.exibir_observacao || 0) ? 1 : 0;
+                const precisaLaudo = Number(raw.precisa_laudo || raw.necessita_laudo || 0) ? 1 : 0;
+                const laudoObr     = Number(raw.laudo_obrigatorio || raw.envio_laudo_obrigatorio || 0) ? 1 : 0;
 
                 if (!value || !label) return;
 
@@ -655,9 +705,15 @@
                 cb.name  = 'condicoes_especiais_opcoes[]';
                 cb.value = label;
 
+                cb.setAttribute('data-observacoes', precisaObs);
+                cb.setAttribute('data-laudo', precisaLaudo);
+                cb.setAttribute('data-laudo-obrigatorio', laudoObr);
+
                 if (Array.isArray(oldCondicoesOpcoes) && oldCondicoesOpcoes.includes(label)) {
                     cb.checked = true;
                 }
+
+                cb.addEventListener('change', avaliarRequisitosCondicoes);
 
                 const span = document.createElement('span');
                 span.textContent = label;
@@ -668,7 +724,47 @@
                 wrapCondicoesOpcoes.appendChild(wrapper);
             });
 
-            toggleField(fieldCondicoesEsp, true);
+            toggle(fieldCondicoesEsp, (radioSim && radioSim.checked));
+            // Reavalia para setar textarea/aviso de laudo
+            setTimeout(avaliarRequisitosCondicoes, 0);
+        }
+
+        function avaliarRequisitosCondicoes(){
+            if (!wrapCondicoesOpcoes) return;
+
+            const checks = wrapCondicoesOpcoes.querySelectorAll('input[type="checkbox"]');
+            let exigeObs = false;
+            let pedeLaudo = false;
+            let laudoObrigatorio = false;
+
+            checks.forEach(cb => {
+                if (cb.checked) {
+                    if (String(cb.getAttribute('data-observacoes')) === '1')  exigeObs = true;
+                    if (String(cb.getAttribute('data-laudo')) === '1')        pedeLaudo = true;
+                    if (String(cb.getAttribute('data-laudo-obrigatorio')) === '1') laudoObrigatorio = true;
+                }
+            });
+
+            // Observações (texto)
+            if (exigeObs) {
+                toggle(txtCondicoes, true);
+                setRequired(txtCondicoes, true);
+            } else {
+                setRequired(txtCondicoes, false);
+                // mantém visível caso usuário queira detalhar mesmo sem ser obrigatório
+                toggle(txtCondicoes, true);
+            }
+
+            // Aviso de laudo
+            if (pedeLaudo || laudoObrigatorio) {
+                avisoLaudo.style.display = '';
+                avisoLaudo.innerText = laudoObrigatorio
+                    ? 'Para pelo menos uma das condições marcadas, o envio de laudo médico é obrigatório conforme o edital.'
+                    : 'Para pelo menos uma das condições marcadas, poderá ser solicitado laudo médico para análise.';
+            } else {
+                avisoLaudo.style.display = 'none';
+                avisoLaudo.innerText = '';
+            }
         }
 
         /**
@@ -680,7 +776,7 @@
 
             if (!concursoId) {
                 clearSelect(selectCidadeProva, 'Selecione o concurso...');
-                toggleField(fieldCidadeProva, false);
+                toggle(fieldCidadeProva, false);
                 return;
             }
 
@@ -696,7 +792,7 @@
                 .then(data => {
                     if (!data || !data.length) {
                         clearSelect(selectCidadeProva, 'Nenhuma cidade de prova configurada para este concurso');
-                        toggleField(fieldCidadeProva, false);
+                        toggle(fieldCidadeProva, false);
                         return;
                     }
 
@@ -722,12 +818,24 @@
                         selectCidadeProva.appendChild(opt);
                     });
 
-                    toggleField(fieldCidadeProva, true);
+                    toggle(fieldCidadeProva, true);
                 })
                 .catch(() => {
                     clearSelect(selectCidadeProva, 'Erro ao carregar cidades de prova');
-                    toggleField(fieldCidadeProva, false);
+                    toggle(fieldCidadeProva, false);
                 });
+        }
+
+        // SIM/NÃO – mostra/oculta bloco de condições
+        function onToggleQuerCondicoes(){
+            const show = radioSim && radioSim.checked;
+            toggle(fieldCondicoesEsp, show);
+            if (!show && wrapCondicoesOpcoes) {
+                // limpa marcações e requisitos quando desabilita
+                const checks = wrapCondicoesOpcoes.querySelectorAll('input[type="checkbox"]');
+                checks.forEach(cb => cb.checked = false);
+                avaliarRequisitosCondicoes();
+            }
         }
 
         // Quando troca o concurso, carrega cargos, cidades de prova e condições especiais
@@ -737,13 +845,13 @@
 
                 clearSelect(selectCargo, 'Carregando cargos...');
                 clearSelect(selectItem, 'Selecione o cargo...');
-                if (selectItem) selectItem.required = false;
+                if (selectItem) setRequired(selectItem, false);
 
                 clearSelect(selectModalidade, 'Selecione o concurso e o cargo...');
                 clearSelect(selectCidadeProva, 'Selecione o concurso...');
 
-                toggleField(fieldItemWrapper, true);
-                toggleField(fieldCidadeProva, false);
+                toggle(fieldItemWrapper, true);
+                toggle(fieldCidadeProva, false);
 
                 // limpa/oculta condições especiais
                 preencherCondicoesEspeciais(null);
@@ -784,17 +892,17 @@
                 const cargoId    = this.value;
 
                 clearSelect(selectItem, 'Carregando localidades...');
-                if (selectItem) selectItem.required = false;
+                if (selectItem) setRequired(selectItem, false);
 
                 clearSelect(selectModalidade, 'Carregando modalidades...');
-                toggleField(fieldItemWrapper, true);
+                toggle(fieldItemWrapper, true);
 
                 if(!concursoId || !cargoId){
                     clearSelect(selectItem, 'Selecione o cargo...');
-                    if (selectItem) selectItem.required = false;
+                    if (selectItem) setRequired(selectItem, false);
 
                     clearSelect(selectModalidade, 'Selecione o concurso e o cargo...');
-                    toggleField(fieldItemWrapper, false);
+                    toggle(fieldItemWrapper, false);
                     carregarCidadesProva(concursoId, null);
                     return;
                 }
@@ -805,8 +913,8 @@
                     .then(data => {
                         if(!data || !data.length){
                             clearSelect(selectItem, 'Não há localidades cadastradas para este cargo');
-                            if (selectItem) selectItem.required = false;
-                            toggleField(fieldItemWrapper, false);
+                            if (selectItem) setRequired(selectItem, false);
+                            toggle(fieldItemWrapper, false);
                             return;
                         }
 
@@ -822,8 +930,8 @@
                                 }
                                 selectItem.appendChild(opt);
                             });
-                            if (selectItem) selectItem.required = true;
-                            toggleField(fieldItemWrapper, true);
+                            if (selectItem) setRequired(selectItem, true);
+                            toggle(fieldItemWrapper, true);
                         } else {
                             // Apenas uma localidade: seleciona automaticamente (continua obrigatório, mas já vem preenchido)
                             clearSelect(selectItem, 'Única localidade disponível');
@@ -834,15 +942,15 @@
                             opt.selected = true;
                             selectItem.appendChild(opt);
 
-                            if (selectItem) selectItem.required = true;
+                            if (selectItem) setRequired(selectItem, true);
                             // Pode ocultar o campo, já que há uma única opção
-                            toggleField(fieldItemWrapper, false);
+                            toggle(fieldItemWrapper, false);
                         }
                     })
                     .catch(() => {
                         clearSelect(selectItem, 'Erro ao carregar localidades');
-                        if (selectItem) selectItem.required = false;
-                        toggleField(fieldItemWrapper, false);
+                        if (selectItem) setRequired(selectItem, false);
+                        toggle(fieldItemWrapper, false);
                     });
 
                 // Modalidades para este (concurso, cargo)
@@ -853,12 +961,19 @@
             });
         }
 
+        // Listeners de SIM/NÃO
+        if (radioSim)  radioSim.addEventListener('change', onToggleQuerCondicoes);
+        if (radioNao)  radioNao.addEventListener('change', onToggleQuerCondicoes);
+
         // Se veio old('concurso_id') ou um concurso fixo (INSCRIÇÃO ONLINE), dispara change inicial
         document.addEventListener('DOMContentLoaded', function () {
             const oldConcurso = @json(old('concurso_id'));
             const oldCargo    = @json(old('cargo_id'));
 
             const initialConcurso = oldConcurso || fixedConcursoId;
+
+            // Estado inicial do bloco de condições
+            onToggleQuerCondicoes();
 
             if (initialConcurso) {
                 // Preenche condições especiais logo de cara, se já houver concurso definido
