@@ -331,7 +331,8 @@
                 </div>
             @endif
 
-            <form method="POST" action="{{ route('candidato.inscricoes.store') }}">
+            {{-- IMPORTANTE: enctype p/ upload de laudo --}}
+            <form method="POST" action="{{ route('candidato.inscricoes.store') }}" enctype="multipart/form-data">
                 @csrf
 
                 <div class="c-form-grid">
@@ -444,7 +445,7 @@
 
                     {{-- Pergunta + Condições especiais (dinâmicas por concurso) --}}
                     <div class="c-field">
-                        <label class="c-label">Desejo solicitar condições especiais</label>
+                        <label class="c-label">Deseja solicitar condições especiais para a realização da prova?</label>
 
                         <div class="c-radio-group" id="grupo_radio_condicoes">
                             @php
@@ -458,7 +459,7 @@
                             </label>
                             <label class="c-checkbox-row" for="quer_condicoes_1">
                                 <input type="radio" name="quer_condicoes_especiais" id="quer_condicoes_1" value="1" {{ $querSim ? 'checked' : '' }}>
-                                <span>Sim</span>
+                                <span>Sim, conforme previsto no edital</span>
                             </label>
                         </div>
 
@@ -468,6 +469,7 @@
                                 {{-- checkboxes gerados via JS --}}
                             </div>
 
+                            {{-- Observações / descrição adicional --}}
                             <textarea
                                 name="condicoes_especiais"
                                 id="condicoes_especiais"
@@ -475,10 +477,29 @@
                                 placeholder="Descreva detalhes adicionais sobre o atendimento especial ou recursos de acessibilidade, se necessário."
                             >{{ old('condicoes_especiais') }}</textarea>
 
+                            {{-- Campo de laudo médico (anexo) --}}
+                            <div id="wrap_laudo" class="c-field" style="margin-top:8px; display:none;">
+                                <label class="c-label" for="laudo_medico">Laudo médico</label>
+                                <input
+                                    type="file"
+                                    name="laudo_medico"
+                                    id="laudo_medico"
+                                    class="c-input"
+                                    accept=".pdf,.jpg,.jpeg,.png"
+                                >
+                                <div class="c-help">
+                                    Anexe o laudo médico quando exigido para a condição escolhida, conforme orientações do edital.
+                                </div>
+                                @error('laudo_medico')
+                                <div class="c-error">{{ $message }}</div>
+                                @enderror
+                            </div>
+
                             <div id="aviso_laudo" class="c-note" style="margin-top:8px;"></div>
 
                             <div class="c-help" style="margin-top:6px;">
-                                Marque as condições especiais disponíveis para este concurso e, se precisar, complemente com uma descrição.
+                                Marque as condições especiais disponíveis para este concurso e, se precisar,
+                                complemente com uma descrição.
                             </div>
 
                             @error('condicoes_especiais')
@@ -608,6 +629,8 @@
         const wrapCondicoesOpcoes = document.getElementById('condicoes_especiais_opcoes');
         const txtCondicoes        = document.getElementById('condicoes_especiais');
         const avisoLaudo          = document.getElementById('aviso_laudo');
+        const wrapLaudo           = document.getElementById('wrap_laudo');
+        const fileLaudo           = document.getElementById('laudo_medico');
 
         const modalidadesPorCargo   = @json($modalidadesPorCargo);
         const condicoesEspeciaisMap = @json($condicoesEspeciaisMap);
@@ -725,7 +748,7 @@
             });
 
             toggle(fieldCondicoesEsp, (radioSim && radioSim.checked));
-            // Reavalia para setar textarea/aviso de laudo
+            // Reavalia para setar textarea/aviso de laudo/campo de upload
             setTimeout(avaliarRequisitosCondicoes, 0);
         }
 
@@ -753,6 +776,20 @@
                 setRequired(txtCondicoes, false);
                 // mantém visível caso usuário queira detalhar mesmo sem ser obrigatório
                 toggle(txtCondicoes, true);
+            }
+
+            // Laudo (upload)
+            if (pedeLaudo || laudoObrigatorio) {
+                toggle(wrapLaudo, true);
+                if (laudoObrigatorio) {
+                    setRequired(fileLaudo, true);
+                } else {
+                    setRequired(fileLaudo, false);
+                }
+            } else {
+                toggle(wrapLaudo, false);
+                setRequired(fileLaudo, false);
+                if (fileLaudo) fileLaudo.value = '';
             }
 
             // Aviso de laudo

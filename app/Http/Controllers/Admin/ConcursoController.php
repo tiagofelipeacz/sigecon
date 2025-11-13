@@ -352,6 +352,18 @@ class ConcursoController extends Controller
             }
         }
 
+        // ====== NOVOS CAMPOS DE CONFIGURAÇÃO (inscrições por CPF / cargo) ======
+        if (array_key_exists('limite_inscricoes_por_cpf', $configsIn)) {
+            $lim = (int) $configsIn['limite_inscricoes_por_cpf'];
+            if ($lim < 0) $lim = 0; // 0 = ilimitado
+            $configsIn['limite_inscricoes_por_cpf'] = $lim;
+        }
+
+        if (array_key_exists('bloquear_multiplas_inscricoes_mesmo_cargo', $configsIn)) {
+            $configsIn['bloquear_multiplas_inscricoes_mesmo_cargo'] =
+                ((string)$configsIn['bloquear_multiplas_inscricoes_mesmo_cargo'] === '1') ? 1 : 0;
+        }
+
         $configsNew = array_replace_recursive($configsOld, $configsIn);
 
         $extrasOld = (array) ($concurso->extras ?? []);

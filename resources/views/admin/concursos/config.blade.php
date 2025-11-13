@@ -331,10 +331,55 @@
         $termos = (int) old('configs.exibir_termos', data_get($concurso, 'configs.exibir_termos', 0)); // padrão Não
         $permCanc = old('configs.flag_permitir_cancelar_inscricao', data_get($concurso, 'configs.flag_permitir_cancelar_inscricao', '0')); // padrão Não
         $sitCanc = old('configs.situacoes_cancelar_inscricao', data_get($concurso, 'configs.situacoes_cancelar_inscricao', '1'));
+
+        // NOVOS CAMPOS
+        $limiteCpf = (int) old(
+            'configs.limite_inscricoes_por_cpf',
+            data_get($concurso, 'configs.limite_inscricoes_por_cpf', 1) // default 1 como regra antiga
+        );
+        if ($limiteCpf < 0) $limiteCpf = 0;
+
+        $bloqMesmoCargo = (int) old(
+            'configs.bloquear_multiplas_inscricoes_mesmo_cargo',
+            data_get($concurso, 'configs.bloquear_multiplas_inscricoes_mesmo_cargo', 1) // default Sim
+        );
       @endphp
       <div class="card-min">
         <div class="hd">Configurações de Inscrição</div>
         <div class="form-min">
+
+          {{-- Quantidade de inscrições por CPF --}}
+          <label>Quantidade de inscrições permitidas por CPF</label>
+          <div>
+            <select name="configs[limite_inscricoes_por_cpf]" style="max-width:220px;">
+              <option value="0" {{ $limiteCpf === 0 ? 'selected' : '' }}>Ilimitada</option>
+              @for($i = 1; $i <= 5; $i++)
+                <option value="{{ $i }}" {{ $limiteCpf === $i ? 'selected' : '' }}>
+                  {{ $i }} inscrição{{ $i > 1 ? 's' : '' }}
+                </option>
+              @endfor
+            </select>
+            <div class="muted" style="margin-top:4px;">
+              Limite global por CPF neste concurso. Use "Ilimitada" para permitir mais de {{ 5 }} inscrições.
+            </div>
+          </div>
+
+          {{-- Bloquear múltiplas inscrições no mesmo cargo --}}
+          <label>Bloquear múltiplas inscrições no mesmo cargo</label>
+          <div>
+            <label style="margin-right:16px;">
+              <input type="radio" name="configs[bloquear_multiplas_inscricoes_mesmo_cargo]" value="1" {{ $bloqMesmoCargo === 1 ? 'checked' : '' }}>
+              Sim
+            </label>
+            <label>
+              <input type="radio" name="configs[bloquear_multiplas_inscricoes_mesmo_cargo]" value="0" {{ $bloqMesmoCargo === 0 ? 'checked' : '' }}>
+              Não
+            </label>
+            <div class="muted" style="margin-top:4px;">
+              Quando "Sim", o mesmo CPF não poderá fazer duas inscrições para o mesmo cargo neste concurso.
+            </div>
+          </div>
+
           {{-- Aceite dos termos --}}
           <label class="full">Exibir aceite dos termos do edital antes da inscrição</label>
           <div class="full">

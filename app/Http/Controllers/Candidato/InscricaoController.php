@@ -7,68 +7,199 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use App\Models\CandidatoInscricao;
 use App\Models\Candidato;
 
 class InscricaoController extends Controller
 {
-    /**
-     * Lista de inscrições do candidato.
-     * - Busca na tabela "inscricoes"
-     * - Considera candidato_id OU cpf
-     * - Carrega dados de concursos e cargos em lote
-     * - Agrupa por concurso (edital) para exibir em blocos
-     */
+    private array $colMetaCache = [];
+    private array $enumCache = [];
+    private array $fkCache = [];
+
+    private function concursoKeyOnInscricoes(): string
+    {
+        $tbl = (new CandidatoInscricao)->getTable();
+        if (Schema::hasColumn($tbl, 'edital_id')) return 'edital_id';
+        if (Schema::hasColumn($tbl, 'concurso_id')) return 'concurso_id';
+        return 'edital_id';
+    }
+
+    private function decodeConfigs($concurso): array
+    {
+        if (!$concurso) return [];
+        $raw = $concurso->configs ?? null;
+        if (is_array($raw)) return $raw;
+        if (is_object($raw)) return (array) $raw;
+        if (is_string($raw) && $raw !== '') {
+            $arr = json_decode($raw, true);
+            return (json_last_error() === JSON_ERROR_NONE && is_array($arr)) ? $arr : [];
+        }
+        return [];
+    }
+
+    private function columnMeta(string $table, string $column): ?array
+    {
+        $key = $table.'|'.$column;
+        if (isset($this->colMetaCache[$key])) return $this->colMetaCache[$key];
+
+        try {
+            $row = DB::table('information_schema.columns')
+                ->select('data_type', 'character_maximum_length', 'extra', 'generation_expression', 'column_type')
+                ->where('table_schema', DB::raw('DATABASE()'))
+                ->where('table_name', $table)
+                ->where('column_name', $column)
+                ->first();
+
+            if (!$row) return $this->colMetaCache[$key] = null;
+
+            $isGenerated = false;
+            $extra = strtolower((string)($row->extra ?? ''));
+            if (str_contains($extra, 'generated')) $isGenerated = true;
+            if (!empty($row->generation_expression)) $isGenerated = true;
+
+            return $this->colMetaCache[$key] = [
+                'data_type'     => strtolower((string)($row->data_type ?? '')),
+                'max'           => $row->character_maximum_length ? (int)$row->character_maximum_length : null,
+                'is_generated'  => $isGenerated,
+                'column_type'   => (string)($row->column_type ?? ''),
+            ];
+        } catch (\Throwable $e) {
+            return $this->colMetaCache[$key] = null;
+        }
+    }
+
+    private function fkRef(string $table, string $column): ?array
+    {
+        $key = $table.'|'.$column;
+        if (isset($this->fkCache[$key])) return $this->fkCache[$key];
+
+        try {
+            $row = DB::table('information_schema.KEY_COLUMN_USAGE')
+                ->select('REFERENCED_TABLE_NAME as ref_table', 'REFERENCED_COLUMN_NAME as ref_column')
+                ->where('TABLE_SCHEMA', DB::raw('DATABASE()'))
+                ->where('TABLE_NAME', $table)
+                ->where('COLUMN_NAME', $column)
+                ->whereNotNull('REFERENCED_TABLE_NAME')
+                ->first();
+
+            if (!$row) return $this->fkCache[$key] = null;
+
+            return $this->fkCache[$key] = [
+                'ref_table'  => (string)$row->ref_table,
+                'ref_column' => (string)$row->ref_column,
+            ];
+        } catch (\Throwable $e) {
+            return $this->fkCache[$key] = null;
+        }
+    }
+
+    private function isGeneratedColumn(string $table, string $column): bool
+    {
+        $meta = $this->columnMeta($table, $column);
+        return (bool)($meta['is_generated'] ?? false);
+    }
+
+    private function isEnumOrSet(string $table, string $column): bool
+    {
+        $meta = $this->columnMeta($table, $column);
+        if (!$meta) return false;
+        $dt = $meta['data_type'] ?? '';
+        return ($dt === 'enum' || $dt === 'set');
+    }
+
+    private function enumAllowedValues(string $table, string $column): array
+    {
+        $key = $table.'|'.$column;
+        if (isset($this->enumCache[$key])) return $this->enumCache[$key];
+
+        $meta = $this->columnMeta($table, $column);
+        $colType = $meta['column_type'] ?? '';
+        $allowed = [];
+
+        if (preg_match("/^(enum|set)\((.*)\)$/i", $colType, $m)) {
+            $list = $m[2];
+            $parts = preg_split("/,(?=(?:[^']*'[^']*')*[^']*$)/", $list);
+            foreach ($parts as $p) {
+                $p = trim($p);
+                if (strlen($p) >= 2 && $p[0] === "'" && substr($p, -1) === "'") {
+                    $val = str_replace("\\'", "'", substr($p, 1, -1));
+                    $allowed[] = $val;
+                }
+            }
+        }
+
+        return $this->enumCache[$key] = $allowed;
+    }
+
+    private function norm(string $s): string
+    {
+        $s = mb_strtolower($s, 'UTF-8');
+        $s = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
+        return preg_replace('/\s+/', ' ', trim($s));
+    }
+
+    private function normalizeToAllowed(string $value, array $allowed): ?string
+    {
+        if (!$allowed) return $value;
+        $vNorm = $this->norm($value);
+        foreach ($allowed as $opt) {
+            if ($this->norm($opt) === $vNorm) return $opt;
+        }
+        foreach ($allowed as $opt) {
+            if (str_contains($vNorm, $this->norm($opt))) return $opt;
+        }
+        if (preg_match('/\bpcd\b|deficienc/i', $value)) {
+            foreach ($allowed as $opt) {
+                if (preg_match('/\bpcd\b|deficienc/i', $opt)) return $opt;
+            }
+        }
+        if (preg_match('/ampla/i', $value)) {
+            foreach ($allowed as $opt) {
+                if (preg_match('/ampla/i', $opt)) return $opt;
+            }
+        }
+        if (preg_match('/\bpp\b|pret|pard/i', $value)) {
+            foreach ($allowed as $opt) {
+                if (preg_match('/\bpp\b|pret|pard/i', $opt)) return $opt;
+            }
+        }
+        return null;
+    }
+
     public function index()
     {
-        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
 
-        // Todas as inscrições do candidato (candidato_id OU cpf)
         $inscricoes = CandidatoInscricao::where(function ($q) use ($user) {
                 $q->where('candidato_id', $user->id);
-
-                if (!empty($user->cpf)) {
-                    $q->orWhere('cpf', $user->cpf);
-                }
+                if (!empty($user->cpf)) $q->orWhere('cpf', $user->cpf);
             })
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->get();
 
-        // IDs únicos de concursos (edital_id via accessor concurso_id) e cargos
-        $concursoIds = $inscricoes->pluck('concurso_id')->unique()->filter()->values();
+        $colConcurso = $this->concursoKeyOnInscricoes();
+
+        $concursoIds = $inscricoes->pluck($colConcurso)->unique()->filter()->values();
         $cargoIds    = $inscricoes->pluck('cargo_id')->unique()->filter()->values();
 
-        // Concursos (título, edital, etc.) — tabela "concursos"
         $concursos = $concursoIds->isNotEmpty()
-            ? DB::table('concursos')
-                ->whereIn('id', $concursoIds)
-                ->get()
-                ->keyBy('id')
+            ? DB::table('concursos')->whereIn('id', $concursoIds)->get()->keyBy('id')
             : collect();
 
-        // Cargos: tenta na tabela nova; se não achar nada, tenta na tabela antiga "cargos"
         $cargos = collect();
         if ($cargoIds->isNotEmpty()) {
             if (Schema::hasTable('concursos_vagas_cargos')) {
-                $cargos = DB::table('concursos_vagas_cargos')
-                    ->whereIn('id', $cargoIds)
-                    ->get()
-                    ->keyBy('id');
+                $cargos = DB::table('concursos_vagas_cargos')->whereIn('id', $cargoIds)->get()->keyBy('id');
             }
-
             if ($cargos->isEmpty() && Schema::hasTable('cargos')) {
-                $cargos = DB::table('cargos')
-                    ->whereIn('id', $cargoIds)
-                    ->get()
-                    ->keyBy('id');
+                $cargos = DB::table('cargos')->whereIn('id', $cargoIds)->get()->keyBy('id');
             }
         }
 
-        // Agrupa inscrições por concurso (edital) para exibir blocos separados na tela
-        // OBS: "concurso_id" aqui é um accessor no model que devolve "edital_id"
-        $inscricoesPorConcurso = $inscricoes->groupBy('concurso_id');
+        $inscricoesPorConcurso = $inscricoes->groupBy($colConcurso);
 
         return view('site.candidato.inscricoes.index', compact(
             'inscricoes',
@@ -78,20 +209,14 @@ class InscricaoController extends Controller
         ));
     }
 
-    /**
-     * Formulário "Nova inscrição"
-     *
-     * - Lista concursos abertos
-     * - Monta mapa de modalidades por (concurso_id, cargo_id)
-     * - Monta mapa de condições especiais por concurso
-     * - Se vier ?concurso_id=... (ou ?concurso=...), trava o concurso na view
-     */
     public function create(Request $request)
     {
-        // Lista concursos abertos (inscrições dentro do período e online)
         $concursos = DB::table('concursos')
             ->where('ativo', 1)
-            ->where('ocultar_site', 0)
+            ->where(function ($q) {
+                if (Schema::hasColumn('concursos', 'oculto')) $q->where('oculto', 0);
+                else $q->where('ocultar_site', 0);
+            })
             ->where('inscricoes_online', 1)
             ->whereNotNull('inscricoes_inicio')
             ->whereNotNull('inscricoes_fim')
@@ -99,16 +224,12 @@ class InscricaoController extends Controller
             ->orderBy('id', 'desc')
             ->get();
 
-        // Concurso explicitamente selecionado (para travar na tela)
         $concursoSelecionado = null;
         $concursoParam = $request->get('concurso_id', $request->get('concurso'));
         if ($concursoParam) {
-            $concursoSelecionado = DB::table('concursos')->where('id', (int) $concursoParam)->first();
+            $concursoSelecionado = DB::table('concursos')->where('id', (int)$concursoParam)->first();
         }
 
-        // ------------------------------------------------------
-        // MODALIDADES DINÂMICAS POR VAGA (CARGO NO CONCURSO)
-        // ------------------------------------------------------
         $modalidadesPorCargo = [];
 
         if (
@@ -121,22 +242,16 @@ class InscricaoController extends Controller
 
             $hasVagasTotais = Schema::hasColumn('concursos_vagas_itens', 'vagas_totais');
 
-            // Total de vagas gerais por concurso + cargo
             $totais = DB::table('concursos_vagas_itens as i')
                 ->select(
                     'i.concurso_id',
                     'i.cargo_id',
-                    DB::raw(
-                        $hasVagasTotais
-                            ? 'SUM(COALESCE(i.vagas_totais, 0)) AS total_vagas'
-                            : '0 AS total_vagas'
-                    )
+                    DB::raw($hasVagasTotais ? 'SUM(COALESCE(i.vagas_totais, 0)) AS total_vagas' : '0 AS total_vagas')
                 )
                 ->whereIn('i.concurso_id', $concursoIds)
                 ->groupBy('i.concurso_id', 'i.cargo_id')
                 ->get();
 
-            // Vagas especiais dinâmicas (cotas) por tipo
             $cotas = DB::table('concursos_vagas_itens as i')
                 ->join('concursos_vagas_cotas as c', 'c.item_id', '=', 'i.id')
                 ->join('tipos_vagas_especiais as t', 't.id', '=', 'c.tipo_id')
@@ -152,69 +267,39 @@ class InscricaoController extends Controller
                 ->groupBy('i.concurso_id', 'i.cargo_id', 'c.tipo_id', 't.nome')
                 ->get();
 
-            // Índice auxiliar para cotas por (concurso|cargo)
             $cotasPorChave = [];
             foreach ($cotas as $row) {
-                $key = $row->concurso_id . '|' . $row->cargo_id;
+                $key = $row->concurso_id.'|'.$row->cargo_id;
                 $cotasPorChave[$key][] = $row;
             }
 
             foreach ($totais as $row) {
-                $key           = $row->concurso_id . '|' . $row->cargo_id;
-                $totalVagas    = (int) ($row->total_vagas ?? 0);
+                $key           = $row->concurso_id.'|'.$row->cargo_id;
+                $totalVagas    = (int)($row->total_vagas ?? 0);
                 $listaModalids = [];
 
-                // Sempre que houver qualquer vaga total, habilita "Ampla concorrência"
-                if ($totalVagas > 0) {
-                    $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
-                }
+                if ($totalVagas > 0) $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
 
-                // Modalidades especiais dinâmicas vindas de tipos_vagas_especiais
                 if (!empty($cotasPorChave[$key])) {
                     foreach ($cotasPorChave[$key] as $cotaRow) {
-                        if ((int) $cotaRow->total_cota <= 0) {
-                            continue;
-                        }
-
-                        $nomeTipo = trim((string) $cotaRow->tipo_nome);
-                        if ($nomeTipo === '') {
-                            continue;
-                        }
-
-                        // A chave e o label são o próprio nome da modalidade
+                        if ((int)$cotaRow->total_cota <= 0) continue;
+                        $nomeTipo = trim((string)$cotaRow->tipo_nome);
+                        if ($nomeTipo === '') continue;
                         $listaModalids[$nomeTipo] = $nomeTipo;
                     }
                 }
 
-                // Se, por algum motivo, não houver nada detectado, garante pelo menos "Ampla"
-                if (empty($listaModalids)) {
-                    $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
-                }
-
+                if (empty($listaModalids)) $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
                 $modalidadesPorCargo[$key] = $listaModalids;
             }
         }
 
-        // ------------------------------------------------------
-        // Lista GLOBAL de modalidades (para a view atual)
-        // ------------------------------------------------------
         $modalidades = [];
         foreach ($modalidadesPorCargo as $mods) {
-            foreach ($mods as $value => $label) {
-                $modalidades[$value] = $label;
-            }
+            foreach ($mods as $value => $label) $modalidades[$value] = $label;
         }
+        if (empty($modalidades)) $modalidades = ['Ampla concorrência' => 'Ampla concorrência'];
 
-        // Se nada vier do banco, garante ao menos "Ampla concorrência"
-        if (empty($modalidades)) {
-            $modalidades = [
-                'Ampla concorrência' => 'Ampla concorrência',
-            ];
-        }
-
-        // ------------------------------------------------------
-        // CONDIÇÕES ESPECIAIS DINÂMICAS POR CONCURSO
-        // ------------------------------------------------------
         $condicoesEspeciaisMap = [];
 
         if (
@@ -224,103 +309,73 @@ class InscricaoController extends Controller
         ) {
             $concursoIds = $concursos->pluck('id')->filter()->values();
 
-            // Descobre dinamicamente quais colunas de texto existem na tabela de tipos
-            $labelCandidateCols = ['nome', 'descricao', 'descricao_condicao', 'titulo', 'texto', 'label'];
+            $labelCandidateCols = ['nome','descricao','descricao_condicao','titulo','texto','label'];
             $labelCols = [];
             foreach ($labelCandidateCols as $col) {
-                if (Schema::hasColumn('tipos_condicao_especial', $col)) {
-                    $labelCols[] = $col;
-                }
+                if (Schema::hasColumn('tipos_condicao_especial', $col)) $labelCols[] = $col;
             }
 
-            // Monta lista de colunas para o select
             $selects = ['ctce.concurso_id', 't.id'];
-            if (Schema::hasColumn('tipos_condicao_especial', 'codigo')) {
-                $selects[] = 't.codigo';
+            if (Schema::hasColumn('tipos_condicao_especial', 'codigo')) $selects[] = 't.codigo';
+            foreach (['exibir_observacoes','exibir_observacao','precisa_laudo','necessita_laudo','laudo_obrigatorio','envio_laudo_obrigatorio'] as $flagCol) {
+                if (Schema::hasColumn('tipos_condicao_especial', $flagCol)) $selects[] = 't.'.$flagCol;
             }
-            foreach ($labelCols as $col) {
-                $selects[] = 't.' . $col . ' as ' . $col;
-            }
+            foreach ($labelCols as $col) $selects[] = 't.'.$col.' as '.$col;
 
             $q = DB::table('concurso_tipo_condicao_especial as ctce')
                 ->join('tipos_condicao_especial as t', 't.id', '=', 'ctce.tipo_condicao_especial_id')
                 ->whereIn('ctce.concurso_id', $concursoIds)
                 ->select($selects);
 
-            // Se existirem colunas de "ativo", filtra
-            if (Schema::hasColumn('tipos_condicao_especial', 'ativo')) {
-                $q->where('t.ativo', 1);
-            }
-            if (Schema::hasColumn('concurso_tipo_condicao_especial', 'ativo')) {
-                $q->where('ctce.ativo', 1);
-            }
+            if (Schema::hasColumn('tipos_condicao_especial', 'ativo')) $q->where('t.ativo', 1);
+            if (Schema::hasColumn('concurso_tipo_condicao_especial', 'ativo')) $q->where('ctce.ativo', 1);
 
-            // Ordenação amigável
-            if (Schema::hasColumn('tipos_condicao_especial', 'ordem')) {
-                $q->orderBy('t.ordem');
-            } elseif (Schema::hasColumn('tipos_condicao_especial', 'nome')) {
-                $q->orderBy('t.nome');
-            } elseif (Schema::hasColumn('tipos_condicao_especial', 'descricao')) {
-                $q->orderBy('t.descricao');
-            } else {
-                $q->orderBy('t.id');
-            }
+            if (Schema::hasColumn('tipos_condicao_especial', 'ordem')) $q->orderBy('t.ordem');
+            elseif (Schema::hasColumn('tipos_condicao_especial', 'nome')) $q->orderBy('t.nome');
+            elseif (Schema::hasColumn('tipos_condicao_especial', 'descricao')) $q->orderBy('t.descricao');
+            else $q->orderBy('t.id');
 
             $rows = $q->get();
 
             foreach ($rows as $row) {
-                // Monta o label a partir das colunas de texto encontradas
                 $label = null;
                 foreach ($labelCols as $col) {
-                    if (!empty($row->{$col})) {
-                        $label = $row->{$col};
-                        break;
-                    }
+                    if (!empty($row->{$col})) { $label = $row->{$col}; break; }
                 }
-
-                // Se ainda não achou nada, tenta usar "codigo"
-                if (!$label && isset($row->codigo) && $row->codigo !== null && $row->codigo !== '') {
-                    $label = $row->codigo;
-                }
-
-                // Último fallback: "Condição especial #ID"
-                if (!$label) {
-                    $label = 'Condição especial #' . $row->id;
-                }
+                if (!$label && isset($row->codigo) && $row->codigo !== '') $label = $row->codigo;
+                if (!$label) $label = 'Condição especial #'.$row->id;
 
                 $condicoesEspeciaisMap[$row->concurso_id][] = [
-                    'id'        => $row->id,
-                    'value'     => $row->id,
-                    'codigo'    => $row->codigo ?? null,
-                    'label'     => $label,
+                    'id'                 => $row->id,
+                    'value'              => $row->id,
+                    'codigo'             => $row->codigo ?? null,
+                    'label'              => $label,
+                    'exibir_observacoes' => $row->exibir_observacoes ?? $row->exibir_observacao ?? 0,
+                    'precisa_laudo'      => $row->precisa_laudo ?? $row->necessita_laudo ?? 0,
+                    'laudo_obrigatorio'  => $row->laudo_obrigatorio ?? $row->envio_laudo_obrigatorio ?? 0,
                 ];
             }
         }
 
-        // Backward-compat: se a view ainda usar $condicoesEspeciais, aponta para o map
         $condicoesEspeciais = $condicoesEspeciaisMap;
 
-        // Isenção: por enquanto só o "checkbox", sem tipos dinâmicos
-        $tiposIsencao     = [];
-        $temIsencao       = true;  // exibe a caixa de "solicitar isenção"
-        $formasPagamento  = [];    // se quiser depois, dá pra preencher via config/tabela
+        $tiposIsencao    = [];
+        $temIsencao      = true;
+        $formasPagamento = [];
 
         return view('site.candidato.inscricoes.create', compact(
             'concursos',
             'concursoSelecionado',
-            'modalidades',              // usado pela view como lista base
-            'modalidadesPorCargo',      // mapa (concurso|cargo) => modalidades dinâmicas
-            'condicoesEspeciaisMap',    // mapa concurso_id => condições especiais
-            'condicoesEspeciais',       // alias (retrocompat)
+            'modalidades',
+            'modalidadesPorCargo',
+            'condicoesEspeciaisMap',
+            'condicoesEspeciais',
             'tiposIsencao',
             'temIsencao',
             'formasPagamento'
         ));
     }
 
-    /**
-     * Retorna via JSON os cargos de um concurso (para o select dinâmico)
-     */
     public function cargos($concursoId)
     {
         $cargos = DB::table('concursos_vagas_cargos')
@@ -331,21 +386,11 @@ class InscricaoController extends Controller
         return response()->json($cargos);
     }
 
-    /**
-     * Retorna via JSON as localidades (itens) de um cargo dentro de um concurso.
-     * Essas localidades vêm de:
-     *  - concursos_vagas_itens.localidade_id
-     *  - concursos_vagas_localidades.nome
-     */
     public function localidades($concursoId, $cargoId)
     {
         $itens = DB::table('concursos_vagas_itens as i')
             ->leftJoin('concursos_vagas_localidades as l', 'l.id', '=', 'i.localidade_id')
-            ->select(
-                'i.id as item_id',
-                'i.localidade_id',
-                'l.nome as localidade_nome'
-            )
+            ->select('i.id as item_id','i.localidade_id','l.nome as localidade_nome')
             ->where('i.concurso_id', $concursoId)
             ->where('i.cargo_id', $cargoId)
             ->orderBy('l.nome')
@@ -354,155 +399,95 @@ class InscricaoController extends Controller
         return response()->json($itens);
     }
 
-    /**
-     * Retorna via JSON as CIDADES DE PROVA do concurso,
-     * opcionalmente filtradas por cargo (quando houver pivot).
-     *
-     * Detecta dinamicamente:
-     *   - Tabela base: concursos_cidades | concursos_cidades_prova | cidades_prova
-     *   - Colunas: cidade|nome, uf|estado, ativo, ordem
-     *   - Pivot opcional: concursos_cidades_cargos (cidade_id, cargo_id[, ativo])
-     */
     public function cidadesProva($concursoId, $cargoId = null)
     {
         $hasTable = fn(string $t) => Schema::hasTable($t);
         $hasCol   = fn(string $t, string $c) => Schema::hasColumn($t, $c);
 
-        // 1) Detecta tabela base
         $tblCidades = null;
         foreach (['concursos_cidades', 'concursos_cidades_prova', 'cidades_prova'] as $t) {
-            if ($hasTable($t) && $hasCol($t, 'concurso_id')) {
-                $tblCidades = $t;
-                break;
-            }
+            if ($hasTable($t) && $hasCol($t, 'concurso_id')) { $tblCidades = $t; break; }
         }
-        if (!$tblCidades) {
-            return response()->json([]);
-        }
+        if (!$tblCidades) return response()->json([]);
 
-        // 2) Query base
-        $qb = DB::table($tblCidades.' as cp')
-            ->where('cp.concurso_id', (int) $concursoId);
+        $qb = DB::table($tblCidades.' as cp')->where('cp.concurso_id', (int)$concursoId);
+        if ($hasCol($tblCidades, 'ativo')) $qb->where('cp.ativo', 1);
 
-        // cidades ativas se existir coluna
-        if ($hasCol($tblCidades, 'ativo')) {
-            $qb->where('cp.ativo', 1);
-        }
-
-        // 3) Se tiver cargo e pivot, filtra por cargo
         if ($cargoId && $hasTable('concursos_cidades_cargos')) {
             $pivot = 'concursos_cidades_cargos';
-            $qb->join($pivot.' as cc', 'cc.cidade_id', '=', 'cp.id')
-               ->where('cc.cargo_id', (int) $cargoId);
-
-            if ($hasCol($pivot, 'ativo')) {
-                $qb->where('cc.ativo', 1);
-            }
+            $qb->join($pivot.' as cc', 'cc.cidade_id', '=', 'cp.id')->where('cc.cargo_id', (int)$cargoId);
+            if ($hasCol($pivot, 'ativo')) $qb->where('cc.ativo', 1);
         }
 
-        // 4) Seleção de colunas flexível
-        $cidadeExpr = $hasCol($tblCidades, 'cidade')
-            ? 'cp.cidade'
-            : ($hasCol($tblCidades, 'nome') ? 'cp.nome' : "''");
-
-        $ufExpr = $hasCol($tblCidades, 'uf')
-            ? 'cp.uf'
-            : ($hasCol($tblCidades, 'estado') ? 'cp.estado' : "''");
+        $cidadeExpr = $hasCol($tblCidades, 'cidade') ? 'cp.cidade' : ($hasCol($tblCidades, 'nome') ? 'cp.nome' : "''");
+        $ufExpr     = $hasCol($tblCidades, 'uf') ? 'cp.uf' : ($hasCol($tblCidades, 'estado') ? 'cp.estado' : "''");
 
         $qb->selectRaw('cp.id, '.$cidadeExpr.' as cidade, '.$ufExpr.' as uf');
 
-        // 5) Ordenação
-        if ($hasCol($tblCidades, 'ordem')) {
-            $qb->orderBy('cp.ordem');
-        } elseif ($hasCol($tblCidades, 'cidade')) {
-            $qb->orderBy('cp.cidade');
-        } elseif ($hasCol($tblCidades, 'nome')) {
-            $qb->orderBy('cp.nome');
-        } else {
-            $qb->orderBy('cp.id');
-        }
+        if ($hasCol($tblCidades, 'ordem')) $qb->orderBy('cp.ordem');
+        elseif ($hasCol($tblCidades, 'cidade')) $qb->orderBy('cp.cidade');
+        elseif ($hasCol($tblCidades, 'nome')) $qb->orderBy('cp.nome');
+        else $qb->orderBy('cp.id');
 
-        // distinct caso tenha join com pivot
         $rows = $qb->distinct()->get();
 
-        // 6) Monta a saída esperada pelo front
         $out = $rows->map(function ($r) {
-            $cidade = trim((string) ($r->cidade ?? ''));
-            $uf     = trim((string) ($r->uf ?? ''));
+            $cidade = trim((string)($r->cidade ?? ''));
+            $uf     = trim((string)($r->uf ?? ''));
             $label  = $cidade && $uf ? ($cidade.' / '.$uf) : ($cidade ?: 'Cidade #'.$r->id);
-
-            return [
-                'id'     => (int) $r->id,
-                'cidade' => $cidade,
-                'uf'     => $uf ?: null,
-                'label'  => $label,
-            ];
+            return ['id'=>(int)$r->id,'cidade'=>$cidade,'uf'=>$uf ?: null,'label'=>$label];
         });
 
         return response()->json($out);
     }
 
-    /**
-     * Alias de compatibilidade para rotas antigas.
-     */
     public function cidades($concursoId, $cargoId = null)
     {
         return $this->cidadesProva($concursoId, $cargoId);
     }
 
-    /**
-     * Salva uma nova inscrição (tabela antiga "inscricoes")
-     */
     public function store(Request $request)
     {
-        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
 
         $data = $request->validate([
-            'concurso_id'          => ['required', 'integer'], // id na tabela "concursos"
-            'cargo_id'             => ['required', 'integer'],
-            'item_id'              => ['nullable', 'integer'],
-
-            // CAMPOS DA TELA
-            'modalidade'                   => ['required', 'string', 'max:50'],
-            'condicoes_especiais'          => ['nullable', 'string'],
-            'condicoes_especiais_opcoes'   => ['nullable', 'array'],
-            'condicoes_especiais_opcoes.*' => ['nullable', 'string', 'max:100'],
-            'solicitou_isencao'            => ['nullable', 'boolean'],
-            'forma_pagamento'              => ['nullable', 'string', 'max:50'],
-            'cidade_prova'                 => ['nullable', 'string', 'max:100'], // texto vindo do select de cidades
+            'concurso_id'                  => ['required','integer'],
+            'cargo_id'                     => ['required','integer'],
+            'item_id'                      => ['nullable','integer'],
+            'modalidade'                   => ['required','string','max:100'],
+            'condicoes_especiais'          => ['nullable','string'],
+            'condicoes_especiais_opcoes'   => ['nullable','array'],
+            'condicoes_especiais_opcoes.*' => ['nullable','string','max:150'],
+            'solicitou_isencao'            => ['nullable','boolean'],
+            'forma_pagamento'              => ['nullable','string','max:50'],
+            'cidade_prova'                 => ['nullable','string','max:100'],
+            'laudo_medico'                 => ['nullable','file','mimes:pdf,jpg,jpeg,png','max:5120'],
         ]);
 
-        // Pega info do concurso/cargo/item para validar período e vínculos
         $concurso = DB::table('concursos')->where('id', $data['concurso_id'])->first();
         abort_unless($concurso, 404);
 
-        // Checa período ainda válido
         if (!($concurso->inscricoes_inicio && $concurso->inscricoes_fim &&
             now()->between($concurso->inscricoes_inicio, $concurso->inscricoes_fim))) {
-            return back()->withInput()->withErrors([
-                'concurso_id' => 'Período de inscrições encerrado para este concurso.',
-            ]);
+            return back()->withInput()->withErrors(['concurso_id' => 'Período de inscrições encerrado para este concurso.']);
         }
 
-        // Cargo (tabela nova de cargos por concurso)
-        $cargo = DB::table('concursos_vagas_cargos')
+        $cargoConcurso = DB::table('concursos_vagas_cargos')
             ->where('id', $data['cargo_id'])
             ->where('concurso_id', $concurso->id)
             ->first();
-        abort_unless($cargo, 404);
+        if (!$cargoConcurso) {
+            return back()->withInput()->withErrors(['cargo_id' => 'Cargo inválido para este concurso.']);
+        }
 
-        // Se existirem localidades para este cargo, item_id passa a ser obrigatório
         if (Schema::hasTable('concursos_vagas_itens')) {
             $temItens = DB::table('concursos_vagas_itens')
                 ->where('concurso_id', $concurso->id)
-                ->where('cargo_id', $cargo->id)
+                ->where('cargo_id', $cargoConcurso->id)
                 ->exists();
 
             if ($temItens && empty($data['item_id'])) {
-                return back()->withInput()->withErrors([
-                    'item_id' => 'Selecione a localidade para este cargo.',
-                ]);
+                return back()->withInput()->withErrors(['item_id' => 'Selecione a localidade para este cargo.']);
             }
         }
 
@@ -511,219 +496,400 @@ class InscricaoController extends Controller
             $item = DB::table('concursos_vagas_itens')
                 ->where('id', $data['item_id'])
                 ->where('concurso_id', $concurso->id)
-                ->where('cargo_id', $cargo->id)
+                ->where('cargo_id', $cargoConcurso->id)
                 ->first();
             abort_unless($item, 404);
         }
 
-        // Impede duplicidade: um candidato por concurso (edital)
-        $ja = CandidatoInscricao::where(function ($q) use ($user) {
+        $configsConcurso = $this->decodeConfigs($concurso);
+        $colConcurso     = $this->concursoKeyOnInscricoes();
+
+        $limitePorCpf = array_key_exists('limite_inscricoes_por_cpf', $configsConcurso)
+            ? (int)$configsConcurso['limite_inscricoes_por_cpf']
+            : 1;
+
+        $qtdeNoConcurso = (int) CandidatoInscricao::where(function ($q) use ($user) {
                 $q->where('candidato_id', $user->id);
-                if (!empty($user->cpf)) {
-                    $q->orWhere('cpf', $user->cpf);
-                }
+                if (!empty($user->cpf)) $q->orWhere('cpf', $user->cpf);
             })
-            ->where('edital_id', $concurso->id)
-            ->exists();
+            ->where($colConcurso, $concurso->id)
+            ->count();
 
-        if ($ja) {
-            return redirect()
-                ->route('candidato.inscricoes.index')
-                ->withErrors(['general' => 'Você já possui inscrição neste concurso.']);
+        if ($limitePorCpf > 0 && $qtdeNoConcurso >= $limitePorCpf) {
+            $msg = $limitePorCpf === 1
+                ? 'Você já possui inscrição neste concurso.'
+                : 'Você já atingiu o limite de '.$limitePorCpf.' inscrições neste concurso para este CPF.';
+            return redirect()->route('candidato.inscricoes.index')->withErrors(['general' => $msg]);
         }
 
-        // Número da inscrição (campo "numero" da tabela inscricoes)
-        $maxNumero  = CandidatoInscricao::max('numero');
-        $nextNumero = $maxNumero ? ($maxNumero + 1) : 1000001;
+        $bloquearMesmoCargo = array_key_exists('bloquear_multiplas_inscricoes_mesmo_cargo', $configsConcurso)
+            ? (int)$configsConcurso['bloquear_multiplas_inscricoes_mesmo_cargo']
+            : 1;
 
-        // Cidade de prova:
-        // 1) Se veio do form (select de cidades do concurso), usa essa
-        // 2) Se não veio, tenta usar a localidade do item (concursos_vagas_localidades)
-        $cidadeProva = $data['cidade_prova'] ?? null;
+        if ($bloquearMesmoCargo === 1) {
+            $jaMesmoCargo = CandidatoInscricao::where(function ($q) use ($user) {
+                    $q->where('candidato_id', $user->id);
+                    if (!empty($user->cpf)) $q->orWhere('cpf', $user->cpf);
+                })
+                ->where($colConcurso, $concurso->id)
+                ->where('cargo_id', $cargoConcurso->id)
+                ->exists();
 
-        if (!$cidadeProva && $item && property_exists($item, 'localidade_id') && $item->localidade_id) {
-            $local = DB::table('concursos_vagas_localidades')
-                ->where('id', $item->localidade_id)
-                ->first();
-            if ($local && isset($local->nome)) {
-                $cidadeProva = $local->nome;
+            if ($jaMesmoCargo) {
+                return redirect()->route('candidato.inscricoes.index')
+                    ->withErrors(['general' => 'Você já possui inscrição neste cargo deste concurso.']);
             }
         }
 
-        // Monta texto final de condições especiais (opções + texto livre)
-        $textoCondicoes = $data['condicoes_especiais'] ?? null;
-        if (!empty($data['condicoes_especiais_opcoes']) && is_array($data['condicoes_especiais_opcoes'])) {
-            $opcoes = array_filter($data['condicoes_especiais_opcoes'], function ($v) {
-                return trim((string) $v) !== '';
-            });
+        $selectedOptions = $data['condicoes_especiais_opcoes'] ?? [];
+        $selectedOptions = is_array($selectedOptions) ? $selectedOptions : [];
 
-            if (!empty($opcoes)) {
-                $opcoesStr = implode('; ', $opcoes);
-                if ($textoCondicoes) {
-                    $textoCondicoes = $opcoesStr . ' | ' . $textoCondicoes;
-                } else {
-                    $textoCondicoes = $opcoesStr;
+        $labelsQueExigemLaudo = [];
+        if (!empty($selectedOptions) && Schema::hasTable('tipos_condicao_especial') && Schema::hasTable('concurso_tipo_condicao_especial')) {
+            $tipos = DB::table('concurso_tipo_condicao_especial as ctce')
+                ->join('tipos_condicao_especial as t', 't.id', '=', 'ctce.tipo_condicao_especial_id')
+                ->where('ctce.concurso_id', $concurso->id)
+                ->select('t.*')
+                ->get();
+
+            foreach ($tipos as $t) {
+                $label = null;
+                foreach (['nome','descricao','descricao_condicao','titulo','texto','label','codigo'] as $c) {
+                    if (Schema::hasColumn('tipos_condicao_especial', $c) && !empty($t->{$c})) {
+                        $label = (string)$t->{$c};
+                        break;
+                    }
                 }
+                if (!$label) $label = 'Condição especial #'.$t->id;
+
+                $precisa = 0;
+                foreach (['precisa_laudo','necessita_laudo'] as $c) {
+                    if (Schema::hasColumn('tipos_condicao_especial', $c) && !empty($t->{$c})) { $precisa = 1; break; }
+                }
+                $obrig = 0;
+                foreach (['laudo_obrigatorio','envio_laudo_obrigatorio'] as $c) {
+                    if (Schema::hasColumn('tipos_condicao_especial', $c) && !empty($t->{$c})) { $obrig = 1; break; }
+                }
+
+                $labelsQueExigemLaudo[$label] = max($precisa, $obrig);
             }
+        }
+
+        $algumaExigeLaudo = false;
+        foreach ($selectedOptions as $lbl) {
+            if (!empty($labelsQueExigemLaudo[$lbl])) { $algumaExigeLaudo = true; break; }
+        }
+
+        if ($algumaExigeLaudo && !$request->hasFile('laudo_medico')) {
+            throw ValidationException::withMessages([
+                'laudo_medico' => 'Para pelo menos uma das condições selecionadas, o envio de laudo médico é obrigatório.',
+            ]);
+        }
+
+        $seqBase = null;
+        if (Schema::hasColumn('concursos', 'sequence_inscricao') && isset($concurso->sequence_inscricao)) {
+            $seqBase = (int)$concurso->sequence_inscricao;
+        }
+        if (!$seqBase) $seqBase = (int)($this->decodeConfigs($concurso)['sequence_inscricao'] ?? 1);
+        if ($seqBase < 1) $seqBase = 1;
+
+        $maxNumeroNoConcurso = CandidatoInscricao::where($colConcurso, $concurso->id)->max('numero');
+        $nextNumero = $maxNumeroNoConcurso ? ((int)$maxNumeroNoConcurso + 1) : $seqBase;
+
+        $cidadeProva = $data['cidade_prova'] ?? null;
+        if (!$cidadeProva && $item && property_exists($item, 'localidade_id') && $item->localidade_id) {
+            $local = DB::table('concursos_vagas_localidades')->where('id', $item->localidade_id)->first();
+            if ($local && isset($local->nome)) $cidadeProva = $local->nome;
+        }
+
+        $textoCondicoes = $data['condicoes_especiais'] ?? null;
+        if (!empty($selectedOptions)) {
+            $opcoesStr = implode('; ', array_filter($selectedOptions, fn($v) => trim((string)$v) !== ''));
+            if ($opcoesStr !== '') $textoCondicoes = $textoCondicoes ? ($opcoesStr.' | '.$textoCondicoes) : $opcoesStr;
         }
 
         $solicitouIsencao = !empty($data['solicitou_isencao']) ? 1 : 0;
         $formaPagamento   = $data['forma_pagamento'] ?? null;
         $pagamentoStatus  = 'pendente';
 
-        // Cria a inscrição na TABELA ANTIGA "inscricoes"
-        $insc = CandidatoInscricao::create([
-            'edital_id'      => $concurso->id,
-            'cargo_id'       => $cargo->id,
-            'item_id'        => $item->id ?? null,
-            'user_id'        => null,
-            'candidato_id'   => $user->id,
-            'cpf'            => $user->cpf,
-            'documento'      => null,
-            'cidade'         => $cidadeProva,
-            'nome_inscricao' => $user->nome,
-            'nome_candidato' => $user->nome,
-            'nascimento'     => $user->data_nascimento,
-            'modalidade'     => $data['modalidade'], // agora é o NOME da modalidade (dinâmico)
-            'status'         => 'confirmada',
-            'numero'         => $nextNumero,
-            'pessoa_key'     => 'C#' . str_pad((string) $user->id, 20, '0', STR_PAD_LEFT),
-            'local_key'      => 0,
-            'ativo'          => 1,
+        $laudoPath = null;
+        if ($request->hasFile('laudo_medico')) {
+            $candId = (int)$user->id;
+            $dir    = "candidatos/laudos/{$candId}";
+            $laudoPath = $request->file('laudo_medico')->store($dir, ['disk' => 'public']);
+        }
 
-            'condicoes_especiais' => $textoCondicoes,
-            'solicitou_isencao'   => $solicitouIsencao,
-            'forma_pagamento'     => $formaPagamento,
-            'pagamento_status'    => $pagamentoStatus,
-        ]);
+        $tblInscricoes = (new CandidatoInscricao)->getTable();
+        $cargoFk = $this->fkRef($tblInscricoes, 'cargo_id');
+        $cargoIdParaSalvar = null;
 
-        return redirect()
-            ->route('candidato.inscricoes.show', $insc->id)
+        if ($cargoFk && ($cargoFk['ref_table'] ?? null)) {
+            $refTable = $cargoFk['ref_table'];
+
+            if ($refTable === 'cargos') {
+                if (Schema::hasColumn('concursos_vagas_cargos', 'cargo_id') && !empty($cargoConcurso->cargo_id)) {
+                    $cargoGlobal = DB::table('cargos')->where('id', $cargoConcurso->cargo_id)->first();
+                    if (!$cargoGlobal) {
+                        return back()->withInput()->withErrors([
+                            'cargo_id' => 'Cargo global não encontrado para este cargo do concurso (consistência de dados).'
+                        ]);
+                    }
+                    $cargoIdParaSalvar = (int)$cargoGlobal->id;
+                } else {
+                    if (Schema::hasColumn('concursos_vagas_cargos', 'nome') && Schema::hasColumn('cargos', 'nome')) {
+                        $cargoGlobal = DB::table('cargos')->where('nome', $cargoConcurso->nome ?? '')->first();
+                        if ($cargoGlobal) {
+                            $cargoIdParaSalvar = (int)$cargoGlobal->id;
+                        } else {
+                            return back()->withInput()->withErrors([
+                                'cargo_id' => 'Não foi possível mapear o cargo do concurso para a tabela global de cargos.'
+                            ]);
+                        }
+                    } else {
+                        return back()->withInput()->withErrors([
+                            'cargo_id' => 'Estrutura não mapeada: FK aponta para cargos, mas não há referência clara (cargo_id/nome).'
+                        ]);
+                    }
+                }
+            } elseif ($refTable === 'concursos_vagas_cargos') {
+                $cargoIdParaSalvar = (int)$cargoConcurso->id;
+            } else {
+                return back()->withInput()->withErrors([
+                    'cargo_id' => "FK de cargo_id aponta para uma tabela inesperada: {$refTable}."
+                ]);
+            }
+        } else {
+            $cargoIdParaSalvar = (int)$cargoConcurso->id;
+        }
+
+        $payload = [];
+        $set = function(string $col, $val) use (&$payload, $tblInscricoes) {
+            if (Schema::hasColumn($tblInscricoes, $col) && !$this->isGeneratedColumn($tblInscricoes, $col)) {
+                $payload[$col] = $val;
+            }
+        };
+
+        $set('cargo_id',            $cargoIdParaSalvar);
+        $set('item_id',             $item->id ?? null);
+        $set('user_id',             null);
+        $set('candidato_id',        $user->id);
+        $set('cpf',                 $user->cpf);
+        $set('documento',           null);
+        $set('cidade',              $cidadeProva);
+        $set('nome_inscricao',      $user->nome);
+        $set('nome_candidato',      $user->nome);
+        $set('nascimento',          $user->data_nascimento);
+        $set('status',              'confirmada');
+        $set('numero',              $nextNumero);
+        $set('pessoa_key',          'C#' . str_pad((string)$user->id, 20, '0', STR_PAD_LEFT));
+        $set('local_key',           0);
+
+        if (Schema::hasColumn($tblInscricoes, 'ativo') && !$this->isGeneratedColumn($tblInscricoes, 'ativo')) {
+            $payload['ativo'] = 1;
+        }
+
+        $set('condicoes_especiais', $textoCondicoes);
+        $set('solicitou_isencao',   $solicitouIsencao);
+        $set('forma_pagamento',     $formaPagamento);
+        $set('pagamento_status',    $pagamentoStatus);
+
+        $set('edital_id',   $concurso->id);
+        $set('concurso_id', $concurso->id);
+
+        if (Schema::hasColumn($tblInscricoes, 'modalidade') && !$this->isGeneratedColumn($tblInscricoes, 'modalidade')) {
+            $modalidadeVal = (string)($data['modalidade'] ?? '');
+            if ($this->isEnumOrSet($tblInscricoes, 'modalidade')) {
+                $allowed    = $this->enumAllowedValues($tblInscricoes, 'modalidade');
+                $normalized = $this->normalizeToAllowed($modalidadeVal, $allowed);
+                if ($normalized === null) {
+                    $opts = $allowed ? 'Opções válidas: '.implode(', ', $allowed) : 'Verifique as opções disponíveis.';
+                    throw ValidationException::withMessages([
+                        'modalidade' => "Modalidade inválida para este concurso. {$opts}",
+                    ]);
+                }
+                $payload['modalidade'] = $normalized;
+            } else {
+                $payload['modalidade'] = $this->safeForColumn($tblInscricoes, 'modalidade', $modalidadeVal);
+            }
+        }
+
+        if ($laudoPath && Schema::hasColumn($tblInscricoes, 'laudo_path') && !$this->isGeneratedColumn($tblInscricoes, 'laudo_path')) {
+            $payload['laudo_path'] = $laudoPath;
+        } elseif ($laudoPath) {
+            if (isset($payload['condicoes_especiais'])) {
+                $payload['condicoes_especiais'] = trim(($payload['condicoes_especiais'] ? $payload['condicoes_especiais'].' | ' : '')."[Laudo anexado]");
+            }
+        }
+
+        $insc = CandidatoInscricao::create($payload);
+
+        return redirect()->route('candidato.inscricoes.show', $insc->id)
             ->with('success', 'Inscrição realizada com sucesso.');
     }
 
-    /**
-     * Tela de detalhes da inscrição
-     */
     public function show($id)
     {
-        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
 
-        // Busca a inscrição garantindo que ela é do candidato (por id OU cpf)
         $insc = CandidatoInscricao::where('id', $id)
             ->where(function ($q) use ($user) {
                 $q->where('candidato_id', $user->id);
-                if (!empty($user->cpf)) {
-                    $q->orWhere('cpf', $user->cpf);
-                }
+                if (!empty($user->cpf)) $q->orWhere('cpf', $user->cpf);
             })
             ->firstOrFail();
 
-        // Concurso (tabela "concursos", usando edital_id/concurso_id)
-        $concurso = DB::table('concursos')
-            ->where('id', $insc->concurso_id) // accessor => edital_id
-            ->first();
+        $colConcurso = $this->concursoKeyOnInscricoes();
+        $concursoId  = $insc->{$colConcurso};
 
-        // Cargo: tenta na tabela nova, depois na tabela antiga "cargos"
+        $concurso = DB::table('concursos')->where('id', $concursoId)->first();
+
         $cargo = null;
         if ($insc->cargo_id) {
-            $cargo = DB::table('concursos_vagas_cargos')
-                ->where('id', $insc->cargo_id)
-                ->first();
-
+            $cargo = DB::table('concursos_vagas_cargos')->where('id', $insc->cargo_id)->first();
             if (!$cargo && Schema::hasTable('cargos')) {
-                $cargo = DB::table('cargos')
-                    ->where('id', $insc->cargo_id)
-                    ->first();
+                $cargo = DB::table('cargos')->where('id', $insc->cargo_id)->first();
             }
         }
 
-        // Localidade (via item_id -> concursos_vagas_itens.localidade_id)
         $localidade = null;
         if ($insc->item_id && Schema::hasTable('concursos_vagas_itens') && Schema::hasTable('concursos_vagas_localidades')) {
-            $item = DB::table('concursos_vagas_itens')
-                ->where('id', $insc->item_id)
-                ->first();
-
+            $item = DB::table('concursos_vagas_itens')->where('id', $insc->item_id)->first();
             if ($item && isset($item->localidade_id) && $item->localidade_id) {
-                $localidade = DB::table('concursos_vagas_localidades')
-                    ->where('id', $item->localidade_id)
-                    ->first();
+                $localidade = DB::table('concursos_vagas_localidades')->where('id', $item->localidade_id)->first();
             }
+        }
+
+        // ===========================
+        // Modalidade: label dinâmico para exibir
+        // ===========================
+        $modalidadeLabel = $insc->modalidade ?: 'Ampla concorrência';
+
+        try {
+            $listaModalidades = [];
+
+            if (
+                $concurso &&
+                $cargo &&
+                Schema::hasTable('concursos_vagas_itens') &&
+                Schema::hasTable('concursos_vagas_cotas') &&
+                Schema::hasTable('tipos_vagas_especiais')
+            ) {
+                $hasVagasTotais = Schema::hasColumn('concursos_vagas_itens', 'vagas_totais');
+
+                $totais = DB::table('concursos_vagas_itens as i')
+                    ->select(
+                        'i.concurso_id',
+                        'i.cargo_id',
+                        DB::raw($hasVagasTotais ? 'SUM(COALESCE(i.vagas_totais,0)) AS total_vagas' : '0 AS total_vagas')
+                    )
+                    ->where('i.concurso_id', $concurso->id)
+                    ->where('i.cargo_id', $cargo->id)
+                    ->groupBy('i.concurso_id', 'i.cargo_id')
+                    ->first();
+
+                if ($totais && (int)($totais->total_vagas ?? 0) > 0) {
+                    $listaModalidades[] = 'Ampla concorrência';
+                }
+
+                $cotas = DB::table('concursos_vagas_itens as i')
+                    ->join('concursos_vagas_cotas as c', 'c.item_id', '=', 'i.id')
+                    ->join('tipos_vagas_especiais as t', 't.id', '=', 'c.tipo_id')
+                    ->select('t.nome as tipo_nome', DB::raw('SUM(COALESCE(c.vagas,0)) AS total_cota'))
+                    ->where('i.concurso_id', $concurso->id)
+                    ->where('i.cargo_id', $cargo->id)
+                    ->where('t.ativo', 1)
+                    ->groupBy('t.nome')
+                    ->get();
+
+                foreach ($cotas as $row) {
+                    if ((int)$row->total_cota <= 0) continue;
+                    $nomeTipo = trim((string)$row->tipo_nome);
+                    if ($nomeTipo !== '') $listaModalidades[] = $nomeTipo;
+                }
+
+                if (empty($listaModalidades)) {
+                    $listaModalidades[] = 'Ampla concorrência';
+                }
+            }
+
+            // se a lista existe, tenta casar o salvo com o "bonito"
+            if (!empty($listaModalidades)) {
+                $want = (string)($insc->modalidade ?? '');
+                $wantNorm = $this->norm($want);
+
+                $pick = null;
+                foreach ($listaModalidades as $m) {
+                    if ($this->norm($m) === $wantNorm) { $pick = $m; break; }
+                }
+                if (!$pick) {
+                    foreach ($listaModalidades as $m) {
+                        if (str_contains($wantNorm, $this->norm($m))) { $pick = $m; break; }
+                    }
+                }
+                // alias rápidos
+                if (!$pick) {
+                    if (preg_match('/\bpcd\b|deficienc/i', $want)) {
+                        foreach ($listaModalidades as $m) if (preg_match('/\bpcd\b|deficienc/i', $m)) { $pick = $m; break; }
+                    } elseif (preg_match('/\bpp\b|pret|pard/i', $want)) {
+                        foreach ($listaModalidades as $m) if (preg_match('/\bpp\b|pret|pard/i', $m)) { $pick = $m; break; }
+                    } elseif (preg_match('/ampla/i', $want)) {
+                        foreach ($listaModalidades as $m) if (preg_match('/ampla/i', $m)) { $pick = $m; break; }
+                    }
+                }
+
+                if ($pick) $modalidadeLabel = $pick;
+            }
+        } catch (\Throwable $e) {
+            // em caso de qualquer problema, mantém o valor salvo
         }
 
         return view('site.candidato.inscricoes.show', compact(
-            'insc',
-            'concurso',
-            'cargo',
-            'localidade',
-            'user'
+            'insc','concurso','cargo','localidade','user','modalidadeLabel'
         ));
     }
 
-    /**
-     * Comprovante em PDF / HTML
-     */
     public function comprovante($id)
     {
-        /** @var \App\Models\Candidato $user */
         $user = Auth::guard('candidato')->user();
 
         $insc = CandidatoInscricao::where('id', $id)
             ->where(function ($q) use ($user) {
                 $q->where('candidato_id', $user->id);
-                if (!empty($user->cpf)) {
-                    $q->orWhere('cpf', $user->cpf);
-                }
+                if (!empty($user->cpf)) $q->orWhere('cpf', $user->cpf);
             })
             ->firstOrFail();
 
-        $concurso = DB::table('concursos')
-            ->where('id', $insc->concurso_id)
-            ->first();
+        $colConcurso = $this->concursoKeyOnInscricoes();
+        $concursoId  = $insc->{$colConcurso};
 
-        // Cargo: mesma lógica do show()
+        $concurso = DB::table('concursos')->where('id', $concursoId)->first();
+
         $cargo = null;
         if ($insc->cargo_id) {
-            $cargo = DB::table('concursos_vagas_cargos')
-                ->where('id', $insc->cargo_id)
-                ->first();
-
+            $cargo = DB::table('concursos_vagas_cargos')->where('id', $insc->cargo_id)->first();
             if (!$cargo && Schema::hasTable('cargos')) {
-                $cargo = DB::table('cargos')
-                    ->where('id', $insc->cargo_id)
-                    ->first();
+                $cargo = DB::table('cargos')->where('id', $insc->cargo_id)->first();
             }
         }
 
-        // Localidade idem show()
         $localidade = null;
         if ($insc->item_id && Schema::hasTable('concursos_vagas_itens') && Schema::hasTable('concursos_vagas_localidades')) {
-            $item = DB::table('concursos_vagas_itens')
-                ->where('id', $insc->item_id)
-                ->first();
-
+            $item = DB::table('concursos_vagas_itens')->where('id', $insc->item_id)->first();
             if ($item && isset($item->localidade_id) && $item->localidade_id) {
-                $localidade = DB::table('concursos_vagas_localidades')
-                    ->where('id', $item->localidade_id)
-                    ->first();
+                $localidade = DB::table('concursos_vagas_localidades')->where('id', $item->localidade_id)->first();
             }
         }
 
-        // Se dompdf estiver instalado, gera PDF; senão retorna HTML "imprimível"
         if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
             $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView(
                 'site.candidato.inscricoes.comprovante_pdf',
-                compact('insc', 'concurso', 'cargo', 'localidade', 'user')
+                compact('insc','concurso','cargo','localidade','user')
             );
             return $pdf->download('comprovante_' . ($insc->numero ?? $insc->id) . '.pdf');
         }
 
-        // Fallback: renderiza HTML imprimível
-        return view(
-            'site.candidato.inscricoes.comprovante_html',
-            compact('insc', 'concurso', 'cargo', 'localidade', 'user')
-        );
+        return view('site.candidato.inscricoes.comprovante_html', compact(
+            'insc','concurso','cargo','localidade','user'
+        ));
     }
 }

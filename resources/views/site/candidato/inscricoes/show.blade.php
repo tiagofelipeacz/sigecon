@@ -14,19 +14,19 @@
     // Concurso
     $concursoTitulo = $concurso->titulo
         ?? $concurso->nome
-        ?? ('Concurso #'.$insc->concurso_id);
+        ?? ('Concurso #'.($insc->concurso_id ?? $insc->edital_id ?? '—'));
 
     $concursoCodigo = $concurso->codigo ?? null;
 
-    // Cargo
-    $cargoNome = $cargo->nome ?? '—';
-
-    // Localidade
-    $localidadeNome = $localidade->nome ?? null;
+    // Cargo / Localidade
+    $cargoNome       = $cargo->nome ?? '—';
+    $localidadeNome  = $localidade->nome ?? null;
 
     // Datas
     $dataInsc = $insc->created_at
-        ? $insc->created_at->format('d/m/Y H:i')
+        ? ($insc->created_at instanceof \Illuminate\Support\Carbon
+            ? $insc->created_at->format('d/m/Y H:i')
+            : \Illuminate\Support\Carbon::parse($insc->created_at)->format('d/m/Y H:i'))
         : '—';
 
     // Número da inscrição (campo numero da tabela inscricoes)
@@ -45,8 +45,54 @@
         $statusClass = 'c-insc-badge-outro';
     }
 
-    // Modalidade: usa exatamente o texto salvo na inscrição
-    $modalidadeInscricao = $insc->modalidade ?: 'Ampla concorrência';
+    // ====== DADOS DINÂMICOS (sempre atualizados do perfil, com fallback para o que foi salvo na inscrição) ======
+    $nomeCandidato = trim((string)($candidato->nome ?? ''));
+    if ($nomeCandidato === '') $nomeCandidato = (string)($insc->nome_candidato ?? $insc->nome_inscricao ?? '—');
+
+    $cpfCandidato = trim((string)($candidato->cpf ?? ''));
+    if ($cpfCandidato === '') $cpfCandidato = (string)($insc->cpf ?? '—');
+
+    // ====== MODALIDADE DINÂMICA / BONITA ======
+    // 1) Se o controller já passar $modalidadeLabel, usamos.
+    // 2) Senão, normalizamos localmente a partir de $insc->modalidade.
+    $modalidadeLabel = $modalidadeLabel ?? null;
+
+    if (!$modalidadeLabel) {
+        $raw = trim((string)($insc->modalidade ?? ''));
+        $norm = mb_strtolower($raw);
+
+        // Mapeamentos comuns (case-insensitive)
+        $map = [
+            'ampla'                                => 'Ampla concorrência',
+            'ampla concorrencia'                   => 'Ampla concorrência',
+            'ampla concorrência'                   => 'Ampla concorrência',
+            'pp'                                   => 'PP - Pessoas Pretas ou Pardas',
+            'pessoas pretas ou pardas'             => 'PP - Pessoas Pretas ou Pardas',
+            'negros'                               => 'PP - Pessoas Pretas ou Pardas',
+            'pcd'                                  => 'PCD - Pessoa com Deficiência',
+            'pessoa com deficiência'               => 'PCD - Pessoa com Deficiência',
+            'pessoa com deficiencia'               => 'PCD - Pessoa com Deficiência',
+            'pcd - pessoa com deficiência'         => 'PCD - Pessoa com Deficiência',
+            'pcd - pessoa com deficiencia'         => 'PCD - Pessoa com Deficiência',
+        ];
+
+        $modalidadeLabel = $raw; // default: o que veio do banco
+        foreach ($map as $k => $bonito) {
+            if ($norm === $k) {
+                $modalidadeLabel = $bonito;
+                break;
+            }
+            // também casa "contém" para entradas como "COTA PCD", "Modalidade: pcd", etc.
+            if (str_contains($norm, $k)) {
+                $modalidadeLabel = $bonito;
+                break;
+            }
+        }
+
+        if ($modalidadeLabel === '' || $modalidadeLabel === null) {
+            $modalidadeLabel = 'Ampla concorrência';
+        }
+    }
 @endphp
 
 @section('content')
@@ -141,9 +187,9 @@
         color:#fff;
     }
     .c-btn-primary:hover{
-        background:var(--c-primary);   /* mantém o fundo escuro no hover */
+        background:var(--c-primary);
         border-color:var(--c-primary);
-        color:#fff;                    /* garante texto branco */
+        color:#fff;
         filter:brightness(1.05);
     }
 
@@ -268,22 +314,11 @@
     }
 
     @media (max-width: 840px){
-        .c-insc-show-page{
-            padding-top:20px;
-        }
-        .c-insc-show-header{
-            flex-direction:column;
-            align-items:flex-start;
-        }
-        .c-insc-show-title-wrap{
-            max-width:100%;
-        }
-        .c-insc-summary{
-            grid-template-columns:1fr;
-        }
-        .c-def-list{
-            grid-template-columns:1fr;
-        }
+        .c-insc-show-page{ padding-top:20px; }
+        .c-insc-show-header{ flex-direction:column; align-items:flex-start; }
+        .c-insc-show-title-wrap{ max-width:100%; }
+        .c-insc-summary{ grid-template-columns:1fr; }
+        .c-def-list{ grid-template-columns:1fr; }
     }
 </style>
 
@@ -330,10 +365,15 @@
                             <strong>Concurso:</strong> {{ $concursoTitulo }}
                         </div>
                         <div>
+                            @php
+                                $concursoIdMostrar = $insc->concurso_id ?? $insc->edital_id ?? null;
+                            @endphp
                             @if($concursoCodigo)
                                 <strong>Código:</strong> {{ $concursoCodigo }} ·
                             @endif
-                            <strong>ID:</strong> {{ $insc->concurso_id }}
+                            @if($concursoIdMostrar)
+                                <strong>ID:</strong> {{ $concursoIdMostrar }}
+                            @endif
                         </div>
                         <div>
                             <strong>Cargo:</strong> {{ $cargoNome }}
@@ -352,25 +392,19 @@
                     <ul class="c-def-list">
                         <li>
                             <div class="c-def-item-label">Nome</div>
-                            <div class="c-def-item-value">{{ $insc->nome_candidato ?? $candidato->nome }}</div>
+                            <div class="c-def-item-value">{{ $nomeCandidato }}</div>
                         </li>
                         <li>
                             <div class="c-def-item-label">CPF</div>
-                            <div class="c-def-item-value">
-                                {{ $insc->cpf ?? $candidato->cpf }}
-                            </div>
+                            <div class="c-def-item-value">{{ $cpfCandidato }}</div>
                         </li>
                         <li>
                             <div class="c-def-item-label">Modalidade</div>
-                            <div class="c-def-item-value">
-                                {{ $modalidadeInscricao }}
-                            </div>
+                            <div class="c-def-item-value">{{ $modalidadeLabel }}</div>
                         </li>
                         <li>
                             <div class="c-def-item-label">Situação</div>
-                            <div class="c-def-item-value">
-                                {{ ucfirst($status) }}
-                            </div>
+                            <div class="c-def-item-value">{{ ucfirst($status) }}</div>
                         </li>
                     </ul>
                 </div>
