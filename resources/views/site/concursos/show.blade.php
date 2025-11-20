@@ -109,12 +109,13 @@
 
   /*
    * ===== Link do botão "Inscrição Online" =====
-   * Agora sempre tenta ir DIRETO para a tela de nova inscrição,
-   * já com o concurso atual (concurso_id) na query.
+   * Sempre tenta ir DIRETO para a tela de nova inscrição
+   * /candidato/inscricoes/nova/{concurso}
+   * protegida pelo auth:candidato (login -> intended -> volta pra cá).
    */
-  if (Route::has('candidato.inscricoes.create') && isset($concurso->id)) {
-    // /candidato/inscricoes/nova?concurso_id=8 (por exemplo)
-    $inscricaoUrl = route('candidato.inscricoes.create', ['concurso_id' => $concurso->id]);
+  if (isset($concurso->id) && Route::has('candidato.inscricoes.create')) {
+    // /candidato/inscricoes/nova/8 (por exemplo)
+    $inscricaoUrl = route('candidato.inscricoes.create', ['concurso' => $concurso->id]);
   } elseif (Route::has('candidato.login')) {
     // fallback: manda para login da área do candidato
     $inscricaoUrl = route('candidato.login');

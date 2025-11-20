@@ -4,23 +4,22 @@
 @section('title', 'Detalhes da inscrição')
 
 @php
-    // Cores vindas da config do site (fallback se não tiver)
+    // Paleta do site
     $primary = $site['primary_color'] ?? $site['primary'] ?? '#0f172a';
     $accent  = $site['accent_color']  ?? $site['accent']  ?? '#111827';
 
     /** @var \App\Models\Candidato|null $candidato */
     $candidato = auth('candidato')->user();
 
-    // Concurso
+    // Concurso (título/código)
     $concursoTitulo = $concurso->titulo
         ?? $concurso->nome
         ?? ('Concurso #'.($insc->concurso_id ?? $insc->edital_id ?? '—'));
-
     $concursoCodigo = $concurso->codigo ?? null;
 
     // Cargo / Localidade
-    $cargoNome       = $cargo->nome ?? '—';
-    $localidadeNome  = $localidade->nome ?? null;
+    $cargoNome      = $cargo->nome ?? '—';
+    $localidadeNome = $localidade->nome ?? null;
 
     // Datas
     $dataInsc = $insc->created_at
@@ -29,7 +28,7 @@
             : \Illuminate\Support\Carbon::parse($insc->created_at)->format('d/m/Y H:i'))
         : '—';
 
-    // Número da inscrição (campo numero da tabela inscricoes)
+    // Número da inscrição
     $numeroInscricao = $insc->numero ?? $insc->id;
 
     // Status / badge
@@ -45,45 +44,82 @@
         $statusClass = 'c-insc-badge-outro';
     }
 
-    // ====== DADOS DINÂMICOS (sempre atualizados do perfil, com fallback para o que foi salvo na inscrição) ======
+    // ====== DADOS DO CANDIDATO (dinâmico do perfil com fallback) ======
     $nomeCandidato = trim((string)($candidato->nome ?? ''));
-    if ($nomeCandidato === '') $nomeCandidato = (string)($insc->nome_candidato ?? $insc->nome_inscricao ?? '—');
+    if ($nomeCandidato === '') {
+        $nomeCandidato = (string)($insc->nome_candidato ?? $insc->nome_inscricao ?? '—');
+    }
 
     $cpfCandidato = trim((string)($candidato->cpf ?? ''));
-    if ($cpfCandidato === '') $cpfCandidato = (string)($insc->cpf ?? '—');
+    if ($cpfCandidato === '') {
+        $cpfCandidato = (string)($insc->cpf ?? '—');
+    }
 
-    // ====== MODALIDADE DINÂMICA / BONITA ======
-    // 1) Se o controller já passar $modalidadeLabel, usamos.
-    // 2) Senão, normalizamos localmente a partir de $insc->modalidade.
-    $modalidadeLabel = $modalidadeLabel ?? null;
+    // ====== MODALIDADE DINÂMICA – usa o mesmo mapa da CREATE quando disponível ======
+    // Esperado do controller (igual create):
+    // $modalidadesPorCargo["concurso_id|cargo_id"] = [ 'valor' => 'Rótulo Bonito', ... ]
+    $modalidadesPorCargo = $modalidadesPorCargo ?? [];
 
-    if (!$modalidadeLabel) {
-        $raw = trim((string)($insc->modalidade ?? ''));
+    $valorModalidade = trim((string)($insc->modalidade ?? '')); // o que foi salvo na inscrição (ex.: 'pcd', 'ampla', 'PP - ...', etc.)
+    $modalidadeLabel = null;
+
+    // 1) Tenta resolver pelo mapa vindo do controller (idêntico ao create)
+    if ($valorModalidade !== '' && !empty($modalidadesPorCargo)) {
+        $cid   = $insc->concurso_id ?? $insc->edital_id ?? null;
+        $cgid  = $insc->cargo_id ?? ($cargo->id ?? null);
+        $key   = ($cid && $cgid) ? ($cid.'|'.$cgid) : null;
+
+        if ($key && !empty($modalidadesPorCargo[$key]) && is_array($modalidadesPorCargo[$key])) {
+            $lista = $modalidadesPorCargo[$key]; // [valor => rótulo]
+
+            // a) Match direto por chave (valor)
+            if (array_key_exists($valorModalidade, $lista)) {
+                $modalidadeLabel = (string) $lista[$valorModalidade];
+            } else {
+                // b) Match case-insensitive por chave
+                $normVal = mb_strtolower($valorModalidade);
+                foreach ($lista as $v => $rotulo) {
+                    if (mb_strtolower((string)$v) === $normVal) {
+                        $modalidadeLabel = (string) $rotulo;
+                        break;
+                    }
+                }
+                // c) Se ainda não achou: pode ter sido salvo já como rótulo; tenta casar contra os rótulos
+                if ($modalidadeLabel === null) {
+                    foreach ($lista as $v => $rotulo) {
+                        if (mb_strtolower((string)$rotulo) === $normVal) {
+                            $modalidadeLabel = (string) $rotulo;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) Fallback: normalizador (mesma ideia usada antes)
+    if ($modalidadeLabel === null) {
+        $raw  = $valorModalidade;
         $norm = mb_strtolower($raw);
 
-        // Mapeamentos comuns (case-insensitive)
         $map = [
-            'ampla'                                => 'Ampla concorrência',
-            'ampla concorrencia'                   => 'Ampla concorrência',
-            'ampla concorrência'                   => 'Ampla concorrência',
-            'pp'                                   => 'PP - Pessoas Pretas ou Pardas',
-            'pessoas pretas ou pardas'             => 'PP - Pessoas Pretas ou Pardas',
-            'negros'                               => 'PP - Pessoas Pretas ou Pardas',
-            'pcd'                                  => 'PCD - Pessoa com Deficiência',
-            'pessoa com deficiência'               => 'PCD - Pessoa com Deficiência',
-            'pessoa com deficiencia'               => 'PCD - Pessoa com Deficiência',
-            'pcd - pessoa com deficiência'         => 'PCD - Pessoa com Deficiência',
-            'pcd - pessoa com deficiencia'         => 'PCD - Pessoa com Deficiência',
+            'ampla'                          => 'Ampla concorrência',
+            'ampla concorrencia'             => 'Ampla concorrência',
+            'ampla concorrência'             => 'Ampla concorrência',
+            'pp'                             => 'PP - Pessoas Pretas ou Pardas',
+            'pessoas pretas ou pardas'       => 'PP - Pessoas Pretas ou Pardas',
+            'negros'                         => 'PP - Pessoas Pretas ou Pardas',
+            'pcd'                            => 'PCD - Pessoa com Deficiência',
+            'pessoa com deficiência'         => 'PCD - Pessoa com Deficiência',
+            'pessoa com deficiencia'         => 'PCD - Pessoa com Deficiência',
+            'pcd - pessoa com deficiência'   => 'PCD - Pessoa com Deficiência',
+            'pcd - pessoa com deficiencia'   => 'PCD - Pessoa com Deficiência',
         ];
 
-        $modalidadeLabel = $raw; // default: o que veio do banco
+        $modalidadeLabel = $raw; // mantém o que veio do banco se não mapear
+
         foreach ($map as $k => $bonito) {
-            if ($norm === $k) {
-                $modalidadeLabel = $bonito;
-                break;
-            }
-            // também casa "contém" para entradas como "COTA PCD", "Modalidade: pcd", etc.
-            if (str_contains($norm, $k)) {
+            if ($norm === $k || str_contains($norm, $k)) {
                 $modalidadeLabel = $bonito;
                 break;
             }

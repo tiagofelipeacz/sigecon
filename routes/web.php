@@ -515,7 +515,7 @@ Route::prefix('candidato')->name('candidato.')->group(function () {
         // Inscrições
         Route::get('/inscricoes', [CandidatoInscricaoController::class, 'index'])->name('inscricoes.index');
 
-        // <<< AJUSTE: concurso opcional na criação
+        // concurso opcional na criação: /candidato/inscricoes/nova ou /candidato/inscricoes/nova/8
         Route::get('/inscricoes/nova/{concurso?}', [CandidatoInscricaoController::class, 'create'])
             ->name('inscricoes.create');
 

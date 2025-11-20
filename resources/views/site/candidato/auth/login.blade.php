@@ -6,6 +6,9 @@
 @php
     use Illuminate\Support\Arr;
 
+    // Pode vir do controller ou ficar vazio (usa cores padrão)
+    $site = $site ?? [];
+
     // Cores vindas da config do site (fallback se não tiver)
     $primary = $site['primary_color'] ?? $site['primary'] ?? '#0f172a';
     $accent  = $site['accent_color']  ?? $site['accent']  ?? '#111827';
@@ -13,6 +16,9 @@
 
     // Se houver erro de senha, já começamos na etapa de senha
     $hasPasswordError = $errors->has('password');
+
+    // URL de retorno após login/cadastro
+    $redirect = $redirect ?? old('redirect') ?? request('redirect');
 @endphp
 
 @section('content')
@@ -285,6 +291,9 @@
             <form id="candidato-login-form" method="POST" action="{{ route('candidato.login.post') }}">
                 @csrf
 
+                {{-- Redirect escondido para voltar para a página desejada --}}
+                <input type="hidden" id="redirect" name="redirect" value="{{ $redirect }}">
+
                 {{-- CPF --}}
                 <div class="auth-form-group">
                     <label for="cpf" class="auth-label">CPF</label>
@@ -337,7 +346,7 @@
                         Ainda não sei se tenho cadastro? Digite o CPF e clique em "Continuar".
                     </span>
 
-                    <a href="{{ route('candidato.password.request') }}" class="auth-link">
+                    <a href="{{ route('candidato.password.request') }}{{ $redirect ? ('?redirect='.urlencode($redirect)) : '' }}" class="auth-link">
                         Esqueci minha senha
                     </a>
                 </div>
@@ -359,6 +368,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const rememberRow    = document.getElementById('remember-row');
     const submitBtn      = document.getElementById('login-submit');
     const cpfOkLabel     = document.getElementById('cpf-ok-label');
+    const redirectInput  = document.getElementById('redirect');
 
     const checkCpfUrl    = "{{ route('candidato.login.checkCpf') }}";
 
@@ -407,6 +417,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
             setCpfError('');
 
+            const payload = { cpf: cpf };
+            if (redirectInput && redirectInput.value) {
+                payload.redirect = redirectInput.value;
+            }
+
             fetch(checkCpfUrl, {
                 method: 'POST',
                 headers: {
@@ -414,7 +429,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     'Accept': 'application/json',
                     'X-CSRF-TOKEN': '{{ csrf_token() }}',
                 },
-                body: JSON.stringify({ cpf: cpf })
+                body: JSON.stringify(payload)
             })
             .then(function (response) {
                 return response.json();
