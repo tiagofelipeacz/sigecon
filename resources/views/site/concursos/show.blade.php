@@ -109,13 +109,14 @@
 
   /*
    * ===== Link do botão "Inscrição Online" =====
-   * Sempre tenta ir DIRETO para a tela de nova inscrição
-   * /candidato/inscricoes/nova/{concurso}
-   * protegida pelo auth:candidato (login -> intended -> volta pra cá).
+   * Tenta ir DIRETO para:
+   *   /candidato/inscricoes/create?concurso_id={id}
+   * (rota protegida por auth:candidato; se não estiver logado,
+   * o Laravel guarda como "intended" e, após o login, volta para ela).
    */
   if (isset($concurso->id) && Route::has('candidato.inscricoes.create')) {
-    // /candidato/inscricoes/nova/8 (por exemplo)
-    $inscricaoUrl = route('candidato.inscricoes.create', ['concurso' => $concurso->id]);
+    // Vai para a tela de nova inscrição já com o concurso na querystring
+    $inscricaoUrl = route('candidato.inscricoes.create', ['concurso_id' => $concurso->id]);
   } elseif (Route::has('candidato.login')) {
     // fallback: manda para login da área do candidato
     $inscricaoUrl = route('candidato.login');

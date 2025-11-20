@@ -168,6 +168,28 @@ class InscricaoController extends Controller
         return null;
     }
 
+    /**
+     * Garante que o valor não estoure o tamanho do campo no banco.
+     */
+    private function safeForColumn(string $table, string $column, ?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $meta = $this->columnMeta($table, $column);
+        if (!$meta) {
+            return $value;
+        }
+
+        $max = $meta['max'] ?? null;
+        if ($max && mb_strlen($value, 'UTF-8') > $max) {
+            $value = mb_substr($value, 0, $max, 'UTF-8');
+        }
+
+        return $value;
+    }
+
     public function index()
     {
         $user = Auth::guard('candidato')->user();
@@ -211,25 +233,62 @@ class InscricaoController extends Controller
 
     public function create(Request $request)
     {
-        $concursos = DB::table('concursos')
+        /**
+         * 1) Descobrir o ID do concurso vindo:
+         *    - pela rota: /candidato/inscricoes/nova/{concurso}
+         *    - ou por query string: ?concurso_id= / ?concurso=
+         */
+        $concursoIdFromRoute = $request->route('concurso')
+            ?? $request->route('concurso_id')
+            ?? $request->route('id');
+
+        $concursoIdFromQuery = $request->get('concurso_id', $request->get('concurso'));
+
+        $concursoId = $concursoIdFromRoute ?: $concursoIdFromQuery;
+
+        /**
+         * 2) Buscar concursos com inscrições abertas.
+         *    Se veio um ID, filtramos só por ele (travando a tela nesse concurso).
+         */
+        $concursosQuery = DB::table('concursos')
             ->where('ativo', 1)
             ->where(function ($q) {
-                if (Schema::hasColumn('concursos', 'oculto')) $q->where('oculto', 0);
-                else $q->where('ocultar_site', 0);
+                if (Schema::hasColumn('concursos', 'oculto')) {
+                    $q->where('oculto', 0);
+                } else {
+                    $q->where('ocultar_site', 0);
+                }
             })
             ->where('inscricoes_online', 1)
             ->whereNotNull('inscricoes_inicio')
             ->whereNotNull('inscricoes_fim')
-            ->whereRaw('NOW() BETWEEN inscricoes_inicio AND inscricoes_fim')
+            ->whereRaw('NOW() BETWEEN inscricoes_inicio AND inscricoes_fim');
+
+        if ($concursoId) {
+            $concursosQuery->where('id', (int) $concursoId);
+        }
+
+        $concursos = $concursosQuery
             ->orderBy('id', 'desc')
             ->get();
 
+        /**
+         * 3) Concurso selecionado explicitamente (para o Blade travar o select).
+         *    Se não estiver na lista de abertos, fazemos um fallback só para exibir o nome,
+         *    mas na hora do store() o período é validado de novo.
+         */
         $concursoSelecionado = null;
-        $concursoParam = $request->get('concurso_id', $request->get('concurso'));
-        if ($concursoParam) {
-            $concursoSelecionado = DB::table('concursos')->where('id', (int)$concursoParam)->first();
+        if ($concursoId) {
+            $concursoSelecionado = $concursos->firstWhere('id', (int) $concursoId);
+
+            if (!$concursoSelecionado) {
+                $concursoSelecionado = DB::table('concursos')
+                    ->where('id', (int) $concursoId)
+                    ->first();
+            }
         }
 
+        // ===== Modalidades dinâmicas por concurso/cargo =====
         $modalidadesPorCargo = [];
 
         if (
@@ -278,7 +337,9 @@ class InscricaoController extends Controller
                 $totalVagas    = (int)($row->total_vagas ?? 0);
                 $listaModalids = [];
 
-                if ($totalVagas > 0) $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
+                if ($totalVagas > 0) {
+                    $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
+                }
 
                 if (!empty($cotasPorChave[$key])) {
                     foreach ($cotasPorChave[$key] as $cotaRow) {
@@ -289,17 +350,25 @@ class InscricaoController extends Controller
                     }
                 }
 
-                if (empty($listaModalids)) $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
+                if (empty($listaModalids)) {
+                    $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
+                }
+
                 $modalidadesPorCargo[$key] = $listaModalids;
             }
         }
 
         $modalidades = [];
         foreach ($modalidadesPorCargo as $mods) {
-            foreach ($mods as $value => $label) $modalidades[$value] = $label;
+            foreach ($mods as $value => $label) {
+                $modalidades[$value] = $label;
+            }
         }
-        if (empty($modalidades)) $modalidades = ['Ampla concorrência' => 'Ampla concorrência'];
+        if (empty($modalidades)) {
+            $modalidades = ['Ampla concorrência' => 'Ampla concorrência'];
+        }
 
+        // ===== Condições especiais (por concurso) =====
         $condicoesEspeciaisMap = [];
 
         if (
@@ -759,9 +828,7 @@ class InscricaoController extends Controller
             }
         }
 
-        // ===========================
         // Modalidade: label dinâmico para exibir
-        // ===========================
         $modalidadeLabel = $insc->modalidade ?: 'Ampla concorrência';
 
         try {
