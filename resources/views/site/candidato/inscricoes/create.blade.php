@@ -9,9 +9,11 @@
     $primary = $site['primary_color'] ?? $site['primary'] ?? '#0f172a';
     $accent  = $site['accent_color']  ?? $site['accent']  ?? '#111827';
 
-    // Mapa vindo do controller:
+    // Mapas vindos do controller
     // $modalidadesPorCargo["concurso_id|cargo_id"] = [...]
     $modalidadesPorCargo = $modalidadesPorCargo ?? [];
+    // $modalidadesRegras["concurso_id|cargo_id"]["Rotulo modalidade"] = ['envio_arquivo' => 'nao|opcional|obrigatorio', 'info_candidato' => ...]
+    $modalidadesRegras   = $modalidadesRegras   ?? [];
 
     $formasPgLista       = $formasPagamento ?? [];
     $tiposIsencao        = $tiposIsencao ?? [];
@@ -331,7 +333,7 @@
                 </div>
             @endif
 
-            {{-- IMPORTANTE: enctype p/ upload de laudo --}}
+            {{-- IMPORTANTE: enctype p/ upload de arquivos --}}
             <form method="POST" action="{{ route('candidato.inscricoes.store') }}" enctype="multipart/form-data">
                 @csrf
 
@@ -395,7 +397,7 @@
                         @enderror
                     </div>
 
-                    {{-- Localidade (Cidade / local de prova vinculado ao cargo) --}}
+                    {{-- Localidade (Cidade / local de prova vinculada ao cargo) --}}
                     <div class="c-field" id="field_item">
                         <label class="c-label" for="item_id">Localidade</label>
                         <select name="item_id" id="item_id" class="c-select" required>
@@ -441,6 +443,24 @@
                         @error('modalidade')
                         <div class="c-error">{{ $message }}</div>
                         @enderror
+
+                        {{-- Campo de arquivo vinculado à modalidade (PCD etc.) --}}
+                        <div id="wrap_arquivo_modalidade" class="c-field" style="margin-top:8px; display:none;">
+                            <label class="c-label" for="arquivo_modalidade">Comprovação para a modalidade</label>
+                            <input
+                                type="file"
+                                name="arquivo_modalidade"
+                                id="arquivo_modalidade"
+                                class="c-input"
+                                accept=".pdf,.jpg,.jpeg,.png"
+                            >
+                            <div class="c-help" id="help_arquivo_modalidade">
+                                Para esta modalidade poderá ser solicitado documento comprobatório, conforme edital.
+                            </div>
+                            @error('arquivo_modalidade')
+                            <div class="c-error">{{ $message }}</div>
+                            @enderror
+                        </div>
                     </div>
 
                     {{-- Pergunta + Condições especiais (dinâmicas por concurso) --}}
@@ -622,6 +642,11 @@
         const fieldCidadeProva    = document.getElementById('field_cidade_prova');
         const selectCidadeProva   = document.getElementById('cidade_prova');
 
+        // Arquivo da modalidade (PCD etc.)
+        const wrapArquivoModalidade  = document.getElementById('wrap_arquivo_modalidade');
+        const inputArquivoModalidade = document.getElementById('arquivo_modalidade');
+        const helpArquivoModalidade  = document.getElementById('help_arquivo_modalidade');
+
         // Radio SIM/NÃO para condições
         const radioNao            = document.getElementById('quer_condicoes_0');
         const radioSim            = document.getElementById('quer_condicoes_1');
@@ -633,6 +658,7 @@
         const fileLaudo           = document.getElementById('laudo_medico');
 
         const modalidadesPorCargo   = @json($modalidadesPorCargo);
+        const modalidadesRegras     = @json($modalidadesRegras);
         const condicoesEspeciaisMap = @json($condicoesEspeciaisMap);
 
         const oldModalidade       = @json(old('modalidade'));
@@ -687,6 +713,64 @@
                 }
                 selectModalidade.appendChild(opt);
             });
+        }
+
+        // ===== Modalidade -> regras de arquivo =====
+        function getRegrasModalidade(concursoId, cargoId, modalidadeLabel){
+            if (!concursoId || !cargoId || !modalidadeLabel) return null;
+            const key = concursoId + '|' + cargoId;
+            const mapa = modalidadesRegras && modalidadesRegras[key] ? modalidadesRegras[key] : null;
+            if (!mapa) return null;
+            return mapa[modalidadeLabel] || null;
+        }
+
+        function aplicarRegraModalidade(){
+            if (!selectModalidade || !wrapArquivoModalidade) return;
+
+            const concursoId = (selectConcurso && selectConcurso.value) ? selectConcurso.value : fixedConcursoId;
+            const cargoId    = selectCargo ? selectCargo.value : null;
+            const modalidade = selectModalidade.value;
+
+            if (!concursoId || !cargoId || !modalidade) {
+                toggle(wrapArquivoModalidade, false);
+                setRequired(inputArquivoModalidade, false);
+                if (inputArquivoModalidade) inputArquivoModalidade.value = '';
+                return;
+            }
+
+            const regra = getRegrasModalidade(concursoId, cargoId, modalidade);
+
+            if (!regra) {
+                // Sem regra específica para esta modalidade
+                toggle(wrapArquivoModalidade, false);
+                setRequired(inputArquivoModalidade, false);
+                if (inputArquivoModalidade) inputArquivoModalidade.value = '';
+                return;
+            }
+
+            const modo = (regra.envio_arquivo || 'nao').toLowerCase();
+            const info = (regra.info_candidato || '').trim();
+
+            if (modo === 'nao') {
+                toggle(wrapArquivoModalidade, false);
+                setRequired(inputArquivoModalidade, false);
+                if (inputArquivoModalidade) inputArquivoModalidade.value = '';
+                return;
+            }
+
+            // opcional ou obrigatorio
+            toggle(wrapArquivoModalidade, true);
+            setRequired(inputArquivoModalidade, (modo === 'obrigatorio'));
+
+            if (helpArquivoModalidade) {
+                if (info !== '') {
+                    helpArquivoModalidade.textContent = info;
+                } else if (modo === 'obrigatorio') {
+                    helpArquivoModalidade.textContent = 'Para esta modalidade, o envio do arquivo é obrigatório, conforme edital.';
+                } else {
+                    helpArquivoModalidade.textContent = 'Para esta modalidade, o envio do arquivo é opcional, porém recomendado.';
+                }
+            }
         }
 
         /**
@@ -890,6 +974,11 @@
                 toggle(fieldItemWrapper, true);
                 toggle(fieldCidadeProva, false);
 
+                // reseta campo de arquivo da modalidade
+                toggle(wrapArquivoModalidade, false);
+                setRequired(inputArquivoModalidade, false);
+                if (inputArquivoModalidade) inputArquivoModalidade.value = '';
+
                 // limpa/oculta condições especiais
                 preencherCondicoesEspeciais(null);
 
@@ -933,6 +1022,11 @@
 
                 clearSelect(selectModalidade, 'Carregando modalidades...');
                 toggle(fieldItemWrapper, true);
+
+                // reseta arquivo da modalidade
+                toggle(wrapArquivoModalidade, false);
+                setRequired(inputArquivoModalidade, false);
+                if (inputArquivoModalidade) inputArquivoModalidade.value = '';
 
                 if(!concursoId || !cargoId){
                     clearSelect(selectItem, 'Selecione o cargo...');
@@ -992,13 +1086,19 @@
 
                 // Modalidades para este (concurso, cargo)
                 preencherModalidades(concursoId, cargoId);
+                setTimeout(aplicarRegraModalidade, 50);
 
                 // Cidades de prova refinadas por cargo (quando houver vínculo em concursos_cidades_cargos)
                 carregarCidadesProva(concursoId, cargoId);
             });
         }
 
-        // Listeners de SIM/NÃO
+        // Quando troca a modalidade, aplica regra de arquivo
+        if (selectModalidade) {
+            selectModalidade.addEventListener('change', aplicarRegraModalidade);
+        }
+
+        // Listeners de SIM/NÃO para condições
         if (radioSim)  radioSim.addEventListener('change', onToggleQuerCondicoes);
         if (radioNao)  radioNao.addEventListener('change', onToggleQuerCondicoes);
 
@@ -1025,6 +1125,11 @@
                     setTimeout(() => {
                         selectCargo.value = oldCargo;
                         selectCargo.dispatchEvent(new Event('change'));
+
+                        // se já tinha modalidade escolhida, aplica regra
+                        if (oldModalidade) {
+                            setTimeout(aplicarRegraModalidade, 200);
+                        }
                     }, 400);
                 }
             }

@@ -4,29 +4,45 @@
 
     // Helper: old() -> model -> default, com fallbacks e normalização
     $val = function (string $key, $default = null) use ($tipo) {
-        $raw = old($key, data_get($tipo, $key, $default));
+        // 1) Base: tenta old() e o campo direto do model SEM default
+        $raw = old($key, data_get($tipo, $key, null));
+
+        // 2) Aliases / espelhamentos
 
         // titulo <-> nome
-        if (($raw === null || $raw === '') && $key === 'titulo') {
-            $raw = old('nome', data_get($tipo, 'nome', $default));
+        if ($key === 'titulo' && ($raw === null || $raw === '')) {
+            $raw = old('nome', data_get($tipo, 'nome', null));
         }
-        if (($raw === null || $raw === '') && $key === 'nome') {
-            $raw = old('titulo', data_get($tipo, 'titulo', $default));
-        }
-
-        // necessita_laudo_medico <-> necessita_laudo
-        if (($raw === null || $raw === '') && $key === 'necessita_laudo_medico') {
-            $raw = old('necessita_laudo', data_get($tipo, 'necessita_laudo', $default));
+        if ($key === 'nome' && ($raw === null || $raw === '')) {
+            $raw = old('titulo', data_get($tipo, 'titulo', null));
         }
 
-        // exige_arquivo_outros <-> envio_arquivo (sim/nao)
-        if (($raw === null || $raw === '') && $key === 'exige_arquivo_outros') {
-            $ea = old('envio_arquivo', data_get($tipo, 'envio_arquivo', $default));
-            if ($ea === 'sim')  $raw = 1;
-            if ($ea === 'nao')  $raw = 0;
+        // necessita_laudo_medico (UI) <-> necessita_laudo (banco)
+        if ($key === 'necessita_laudo_medico' && ($raw === null || $raw === '')) {
+            $raw = old('necessita_laudo', data_get($tipo, 'necessita_laudo', null));
         }
 
-        // Normaliza bools
+        // exige_arquivo_outros (UI 0/1) <-> envio_arquivo (enum no banco)
+        if ($key === 'exige_arquivo_outros' && ($raw === null || $raw === '')) {
+            $ea = old('envio_arquivo', data_get($tipo, 'envio_arquivo', null));
+            if ($ea === 'obrigatorio' || $ea === 'sim') {
+                $raw = 1;
+            } else {
+                $raw = 0;
+            }
+        }
+
+        // Observações (UI) <-> info_candidato (banco)
+        if ($key === 'observacoes' && ($raw === null || $raw === '')) {
+            $raw = old('info_candidato', data_get($tipo, 'info_candidato', null));
+        }
+
+        // 3) Se ainda assim ficar vazio, aplica o default
+        if ($raw === null || $raw === '') {
+            $raw = $default;
+        }
+
+        // 4) Normaliza bools
         if (in_array($key, [
             'ativo','necessita_laudo_medico','laudo_obrigatorio',
             'informar_tipo_deficiencia','autodeclaracao','exige_arquivo_outros',
@@ -82,7 +98,7 @@
       <label><input type="radio" name="laudo_obrigatorio_choice" value="1" {{ $val('laudo_obrigatorio', 0) === 1 ? 'checked':'' }}> Sim</label>
       <label><input type="radio" name="laudo_obrigatorio_choice" value="0" {{ $val('laudo_obrigatorio', 0) === 0 ? 'checked':'' }}> Não</label>
     </div>
-    {{-- Sempre enviar algo, mesmo se os radios ficarem desabilitados --}}
+    {{-- Sempre enviar algo, mesmo se os radios ficarem desativados --}}
     <input type="hidden" name="laudo_obrigatorio" id="hidden-laudo-obrigatorio" value="{{ $val('laudo_obrigatorio', 0) }}">
     <div class="muted full">Se <strong>Necessita de Laudo Médico</strong> = “Não”, este campo é desativado e enviado como “Não”.</div>
 
@@ -100,13 +116,19 @@
       <label><input type="radio" name="autodeclaracao" value="0" {{ $val('autodeclaracao', 0) === 0 ? 'checked':'' }}> Não</label>
     </div>
 
-    {{-- Envio de Arquivo (UI 0/1) + hidden legado sim/nao --}}
+    {{-- Envio de Arquivo (UI 0/1) + hidden com enum real: nao / obrigatorio --}}
     <label>Envio de Arquivo (Outros/Genérico)?</label>
     <div class="radio-row">
       <label><input type="radio" name="exige_arquivo_outros" value="1" {{ $val('exige_arquivo_outros', 0) === 1 ? 'checked':'' }}> Sim</label>
       <label><input type="radio" name="exige_arquivo_outros" value="0" {{ $val('exige_arquivo_outros', 0) === 0 ? 'checked':'' }}> Não</label>
     </div>
-    <input type="hidden" name="envio_arquivo" id="hidden-envio-arquivo" value="{{ $val('exige_arquivo_outros', 0) ? 'sim' : 'nao' }}">
+    {{-- Aqui gravamos no formato aceito pelo ENUM: nao / obrigatorio --}}
+    <input
+        type="hidden"
+        name="envio_arquivo"
+        id="hidden-envio-arquivo"
+        value="{{ $val('exige_arquivo_outros', 0) ? 'obrigatorio' : 'nao' }}"
+    >
 
     {{-- Ativo --}}
     <label>Ativo?</label>
@@ -136,18 +158,23 @@
 
 <script>
 (function(){
-  const form = document.currentScript.closest('form') || document.querySelector('form');
-  if(!form) return;
+  // Garante que vamos pegar o form correto (create/edit de tipos-vagas-especiais)
+  const form = document.currentScript.closest('form')
+      || document.querySelector('form[action*="tipos-vagas-especiais"]');
+
+  if (!form) return;
 
   // Espelha 'titulo' -> hidden 'nome'
   const inputTitulo = form.querySelector('input[name="titulo"]');
   const inputNome   = form.querySelector('#hidden-nome');
   if (inputTitulo && inputNome) {
-    inputTitulo.addEventListener('input', () => { inputNome.value = inputTitulo.value; });
+    inputTitulo.addEventListener('input', () => {
+      inputNome.value = inputTitulo.value;
+    });
   }
 
   // Helpers
-  const $ = (sel) => form.querySelector(sel);
+  const $ = (sel)  => form.querySelector(sel);
   const $$ = (sel) => Array.from(form.querySelectorAll(sel));
 
   function radioVal(name){
@@ -159,47 +186,56 @@
     return radioVal('necessita_laudo_medico') === '1';
   }
 
-  // Sync campos legados (sempre enviados)
+  // Sincroniza os campos "reais" que vão para o banco
   function syncHidden(){
-    // necessita_laudo
-    const nl = radioVal('necessita_laudo_medico') || '0';
-    $('#hidden-necessita-laudo').value = nl;
+    // necessita_laudo (0/1)
+    const nl   = radioVal('necessita_laudo_medico') || '0';
+    const hNec = $('#hidden-necessita-laudo');
+    if (hNec) hNec.value = nl;
 
-    // laudo_obrigatorio (do grupo visual *_choice)
+    // laudo_obrigatorio (0/1), vindo do grupo visual *_choice
     const loChoice = radioVal('laudo_obrigatorio_choice');
-    $('#hidden-laudo-obrigatorio').value = (loChoice ?? '0');
+    const hLo      = $('#hidden-laudo-obrigatorio');
+    if (hLo) hLo.value = (loChoice ?? '0');
 
-    // envio_arquivo sim/nao (a partir de exige_arquivo_outros 0/1)
-    const ea = radioVal('exige_arquivo_outros') || '0';
-    $('#hidden-envio-arquivo').value = (ea === '1') ? 'sim' : 'nao';
+    // envio_arquivo (ENUM: 'nao' / 'obrigatorio')
+    const ea      = radioVal('exige_arquivo_outros') || '0';
+    const hEnvio  = $('#hidden-envio-arquivo');
+    if (hEnvio) hEnvio.value = (ea === '1') ? 'obrigatorio' : 'nao';
   }
 
   function setObrigatorioEnabled(on){
-    $$('#hidden-laudo-obrigatorio'); // garante existência
-    $$('#hidden-laudo-obrigatorio').forEach(()=>{});
-    // Habilita/Desabilita os radios visuais
-    $$('input[name="laudo_obrigatorio_choice"]').forEach(el => el.disabled = !on);
-    if(!on){
-      // força "Não" visualmente
-      const no = $('input[name="laudo_obrigatorio_choice"][value="0"]');
-      if(no) no.checked = true;
+    const radios = $$('input[name="laudo_obrigatorio_choice"]');
+    radios.forEach(el => el.disabled = !on);
+
+    if (!on) {
+      // Força visualmente a opção "Não"
+      const no = form.querySelector('input[name="laudo_obrigatorio_choice"][value="0"]');
+      if (no) no.checked = true;
     }
   }
 
-  // Inicial
+  // Estado inicial
   setObrigatorioEnabled(laudoNecessario());
   syncHidden();
 
   // Eventos
   form.addEventListener('change', (e) => {
     if (!e.target) return;
+
     if (e.target.name === 'necessita_laudo_medico') {
       setObrigatorioEnabled(laudoNecessario());
     }
-    // Qualquer mudança de radio relevante ressincroniza
+
+    // Qualquer mudança relevante ressincroniza os hidden
     if (['necessita_laudo_medico','laudo_obrigatorio_choice','exige_arquivo_outros'].includes(e.target.name)) {
       syncHidden();
     }
+  });
+
+  // Garantia extra: antes de enviar, sincroniza tudo
+  form.addEventListener('submit', () => {
+    syncHidden();
   });
 })();
 </script>

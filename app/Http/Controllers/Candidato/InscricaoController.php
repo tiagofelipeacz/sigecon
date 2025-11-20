@@ -289,7 +289,8 @@ class InscricaoController extends Controller
         }
 
         // ===== Modalidades dinâmicas por concurso/cargo =====
-        $modalidadesPorCargo = [];
+        $modalidadesPorCargo   = [];
+        $modalidadesRegras     = []; // [ "concurso_id|cargo_id" => [ "Modalidade" => ['envio_arquivo' => 'nao|opcional|obrigatorio', 'info_candidato' => string|null], ... ] ]
 
         if (
             $concursos->isNotEmpty() &&
@@ -319,11 +320,20 @@ class InscricaoController extends Controller
                     'i.cargo_id',
                     'c.tipo_id',
                     't.nome as tipo_nome',
+                    't.envio_arquivo',
+                    't.info_candidato',
                     DB::raw('SUM(COALESCE(c.vagas, 0)) AS total_cota')
                 )
                 ->whereIn('i.concurso_id', $concursoIds)
                 ->where('t.ativo', 1)
-                ->groupBy('i.concurso_id', 'i.cargo_id', 'c.tipo_id', 't.nome')
+                ->groupBy(
+                    'i.concurso_id',
+                    'i.cargo_id',
+                    'c.tipo_id',
+                    't.nome',
+                    't.envio_arquivo',
+                    't.info_candidato'
+                )
                 ->get();
 
             $cotasPorChave = [];
@@ -335,29 +345,65 @@ class InscricaoController extends Controller
             foreach ($totais as $row) {
                 $key           = $row->concurso_id.'|'.$row->cargo_id;
                 $totalVagas    = (int)($row->total_vagas ?? 0);
-                $listaModalids = [];
+                $listaModalids = $modalidadesPorCargo[$key] ?? [];
+                $regras        = $modalidadesRegras[$key] ?? [];
 
+                // Sempre que existir vaga total, garantimos Ampla concorrência
                 if ($totalVagas > 0) {
                     $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
+                    if (!isset($regras['Ampla concorrência'])) {
+                        $regras['Ampla concorrência'] = [
+                            'envio_arquivo'  => 'nao',
+                            'info_candidato' => null,
+                        ];
+                    }
                 }
 
                 if (!empty($cotasPorChave[$key])) {
                     foreach ($cotasPorChave[$key] as $cotaRow) {
-                        if ((int)$cotaRow->total_cota <= 0) continue;
+                        if ((int)$cotaRow->total_cota <= 0) {
+                            continue;
+                        }
+
                         $nomeTipo = trim((string)$cotaRow->tipo_nome);
-                        if ($nomeTipo === '') continue;
+                        if ($nomeTipo === '') {
+                            continue;
+                        }
+
+                        // label da modalidade no select
                         $listaModalids[$nomeTipo] = $nomeTipo;
+
+                        // regra de envio de arquivo (enum: nao|opcional|obrigatorio)
+                        $envioArquivo = $cotaRow->envio_arquivo ?? 'nao';
+                        // compatibilidade com dados antigos: 'sim'/'nao'
+                        if (!in_array($envioArquivo, ['nao', 'opcional', 'obrigatorio'], true)) {
+                            $envioArquivo = $envioArquivo === 'sim' ? 'obrigatorio' : 'nao';
+                        }
+
+                        $regras[$nomeTipo] = [
+                            'envio_arquivo'  => $envioArquivo,
+                            'info_candidato' => $cotaRow->info_candidato ?? null,
+                        ];
                     }
                 }
 
+                // se por algum motivo não tiver nada, ainda assim garante Ampla concorrência
                 if (empty($listaModalids)) {
                     $listaModalids['Ampla concorrência'] = 'Ampla concorrência';
+                    if (!isset($regras['Ampla concorrência'])) {
+                        $regras['Ampla concorrência'] = [
+                            'envio_arquivo'  => 'nao',
+                            'info_candidato' => null,
+                        ];
+                    }
                 }
 
                 $modalidadesPorCargo[$key] = $listaModalids;
+                $modalidadesRegras[$key]   = $regras;
             }
         }
 
+        // Lista "plana" de modalidades (para uso geral, se necessário)
         $modalidades = [];
         foreach ($modalidadesPorCargo as $mods) {
             foreach ($mods as $value => $label) {
@@ -437,6 +483,7 @@ class InscricaoController extends Controller
             'concursoSelecionado',
             'modalidades',
             'modalidadesPorCargo',
+            'modalidadesRegras',
             'condicoesEspeciaisMap',
             'condicoesEspeciais',
             'tiposIsencao',
@@ -531,6 +578,7 @@ class InscricaoController extends Controller
             'forma_pagamento'              => ['nullable','string','max:50'],
             'cidade_prova'                 => ['nullable','string','max:100'],
             'laudo_medico'                 => ['nullable','file','mimes:pdf,jpg,jpeg,png','max:5120'],
+            'arquivo_modalidade'          => ['nullable','file','mimes:pdf,jpg,jpeg,png','max:5120'],
         ]);
 
         $concurso = DB::table('concursos')->where('id', $data['concurso_id'])->first();
@@ -655,6 +703,47 @@ class InscricaoController extends Controller
             ]);
         }
 
+        /**
+         * Regras de envio de arquivo vinculadas à modalidade de concorrência
+         * (tipos_vagas_especiais.envio_arquivo = nao|opcional|obrigatorio)
+         */
+        $envioArquivoModalidade = 'nao';
+
+        if (
+            !empty($data['modalidade']) &&
+            Schema::hasTable('concursos_vagas_itens') &&
+            Schema::hasTable('concursos_vagas_cotas') &&
+            Schema::hasTable('tipos_vagas_especiais')
+        ) {
+            $modalidadeLabel = trim((string) $data['modalidade']);
+
+            $tipoMod = DB::table('concursos_vagas_itens as i')
+                ->join('concursos_vagas_cotas as c', 'c.item_id', '=', 'i.id')
+                ->join('tipos_vagas_especiais as t', 't.id', '=', 'c.tipo_id')
+                ->where('i.concurso_id', $concurso->id)
+                ->where('i.cargo_id', $cargoConcurso->id)
+                ->where('t.ativo', 1)
+                ->where('t.nome', $modalidadeLabel)
+                ->select('t.envio_arquivo')
+                ->orderBy('t.id')
+                ->first();
+
+            if ($tipoMod) {
+                $env = $tipoMod->envio_arquivo ?? 'nao';
+                // compatibilidade com dados antigos: 'sim'/'nao'
+                if (!in_array($env, ['nao', 'opcional', 'obrigatorio'], true)) {
+                    $env = $env === 'sim' ? 'obrigatorio' : 'nao';
+                }
+                $envioArquivoModalidade = $env;
+            }
+        }
+
+        if ($envioArquivoModalidade === 'obrigatorio' && !$request->hasFile('arquivo_modalidade')) {
+            throw ValidationException::withMessages([
+                'arquivo_modalidade' => 'Para a modalidade selecionada, o envio do arquivo solicitado é obrigatório.',
+            ]);
+        }
+
         $seqBase = null;
         if (Schema::hasColumn('concursos', 'sequence_inscricao') && isset($concurso->sequence_inscricao)) {
             $seqBase = (int)$concurso->sequence_inscricao;
@@ -686,6 +775,13 @@ class InscricaoController extends Controller
             $candId = (int)$user->id;
             $dir    = "candidatos/laudos/{$candId}";
             $laudoPath = $request->file('laudo_medico')->store($dir, ['disk' => 'public']);
+        }
+
+        $arquivoModalidadePath = null;
+        if ($request->hasFile('arquivo_modalidade')) {
+            $candId = (int)$user->id;
+            $dir    = "candidatos/modalidades/{$candId}";
+            $arquivoModalidadePath = $request->file('arquivo_modalidade')->store($dir, ['disk' => 'public']);
         }
 
         $tblInscricoes = (new CandidatoInscricao)->getTable();
@@ -787,6 +883,14 @@ class InscricaoController extends Controller
         } elseif ($laudoPath) {
             if (isset($payload['condicoes_especiais'])) {
                 $payload['condicoes_especiais'] = trim(($payload['condicoes_especiais'] ? $payload['condicoes_especiais'].' | ' : '')."[Laudo anexado]");
+            }
+        }
+
+        if ($arquivoModalidadePath && Schema::hasColumn($tblInscricoes, 'arquivo_modalidade_path') && !$this->isGeneratedColumn($tblInscricoes, 'arquivo_modalidade_path')) {
+            $payload['arquivo_modalidade_path'] = $arquivoModalidadePath;
+        } elseif ($arquivoModalidadePath) {
+            if (isset($payload['condicoes_especiais'])) {
+                $payload['condicoes_especiais'] = trim(($payload['condicoes_especiais'] ? $payload['condicoes_especiais'].' | ' : '')."[Arquivo da modalidade anexado]");
             }
         }
 

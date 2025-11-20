@@ -79,19 +79,36 @@ class TiposVagasEspeciaisController extends Controller
             $req->merge(['nome' => $req->input('titulo')]);
         }
 
-        // 2) necessita_laudo_medico (UI) -> necessita_laudo (backend)
+        // 2) Necessita de laudo (UI: necessita_laudo_medico) -> coluna necessita_laudo
+        $necessita = null;
         if ($req->has('necessita_laudo_medico')) {
-            $req->merge(['necessita_laudo' => (bool)$req->input('necessita_laudo_medico')]);
+            $necessita = $req->boolean('necessita_laudo_medico');
+        } elseif ($req->has('necessita_laudo')) {
+            $necessita = $req->boolean('necessita_laudo');
+        }
+        if ($necessita !== null) {
+            $req->merge(['necessita_laudo' => $necessita]);
         }
 
-        // 3) exige_arquivo_outros (0/1) -> envio_arquivo (sim/nao)
-        if ($req->has('exige_arquivo_outros') && !$req->has('envio_arquivo')) {
+        // 3) "Envio de laudo obrigatório?" (UI: laudo_obrigatorio_choice) -> laudo_obrigatorio
+        $laudoObr = null;
+        if ($req->has('laudo_obrigatorio_choice')) {
+            $laudoObr = $req->boolean('laudo_obrigatorio_choice');
+        } elseif ($req->has('laudo_obrigatorio')) {
+            $laudoObr = $req->boolean('laudo_obrigatorio');
+        }
+        if ($laudoObr !== null) {
+            $req->merge(['laudo_obrigatorio' => $laudoObr]);
+        }
+
+        // 4) "Envio de arquivo (Outros)" (UI: exige_arquivo_outros 0/1) -> enum envio_arquivo
+        if ($req->has('exige_arquivo_outros')) {
             $req->merge([
-                'envio_arquivo' => $req->boolean('exige_arquivo_outros') ? 'sim' : 'nao'
+                'envio_arquivo' => $req->boolean('exige_arquivo_outros') ? 'obrigatorio' : 'nao',
             ]);
         }
 
-        // 4) Observações -> info_candidato (se info_candidato vier vazio)
+        // 5) Observações -> info_candidato (se info_candidato vier vazio)
         if (!$req->filled('info_candidato') && $req->filled('observacoes')) {
             $req->merge(['info_candidato' => $req->input('observacoes')]);
         }
@@ -110,8 +127,8 @@ class TiposVagasEspeciaisController extends Controller
             'informar_tipo_deficiencia'=> ['nullable','boolean'],
             'autodeclaracao'           => ['nullable','boolean'],
 
-            // aceita também 'sim' para compat da UI; depois mapeamos para 'obrigatorio'
-            'envio_arquivo'  => ['nullable','in:nao,opcional,obrigatorio,sim'],
+            // enum do banco: 'nao','opcional','obrigatorio'
+            'envio_arquivo'  => ['nullable','in:nao,opcional,obrigatorio'],
 
             'info_candidato' => ['nullable','string'],
             'ativo'          => ['nullable','boolean'],
@@ -119,19 +136,18 @@ class TiposVagasEspeciaisController extends Controller
 
         // --- Normalizações pós-validação ---
 
-        // Mapear 'sim' -> 'obrigatorio' (se for o caso)
-        if (($data['envio_arquivo'] ?? null) === 'sim') {
-            $data['envio_arquivo'] = 'obrigatorio';
-        }
-        // Se não veio nada, padroniza como 'nao'
+        // Se não veio nada, padroniza envio_arquivo como 'nao'
         if (!isset($data['envio_arquivo']) || $data['envio_arquivo'] === null || $data['envio_arquivo'] === '') {
             $data['envio_arquivo'] = 'nao';
         }
 
         // Bools garantidos
         foreach ([
-            'sistac','necessita_laudo','laudo_obrigatorio',
-            'informar_tipo_deficiencia','autodeclaracao'
+            'sistac',
+            'necessita_laudo',
+            'laudo_obrigatorio',
+            'informar_tipo_deficiencia',
+            'autodeclaracao',
         ] as $b) {
             $data[$b] = (bool) ($data[$b] ?? false);
         }
