@@ -70,8 +70,8 @@ class AuthController extends Controller
             $user->forceFill(['last_login_at' => now()])->save();
         }
 
-        // 👉 Sempre manda para a home do candidato (não usa mais "intended")
-        return redirect()->route('candidato.home');
+        // ✅ Usa a URL "intended" (ex: /candidato/inscricoes/nova?concurso=6) ou cai na home do candidato
+        return redirect()->intended(route('candidato.home'));
     }
 
     /**
@@ -282,9 +282,10 @@ class AuthController extends Controller
             }
         }
 
-        // 👉 Depois de cadastrar, também vai direto para a home do candidato
+        // ✅ Depois de cadastrar, também respeita a URL "intended" (ex: nova inscrição),
+        //    caindo na home do candidato se não houver intended.
         return redirect()
-            ->route('candidato.home')
+            ->intended(route('candidato.home'))
             ->with('status', 'Cadastro realizado com sucesso! Você já pode acessar a área do candidato.');
     }
 
